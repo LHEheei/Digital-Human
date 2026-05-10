@@ -66,6 +66,23 @@ public final class NativeSpeechBridge {
         });
     }
 
+    public void cancelRecognition() {
+        if (activity == null) {
+            return;
+        }
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (speechRecognizer != null) {
+                    speechRecognizer.cancel();
+                    speechRecognizer.destroy();
+                    speechRecognizer = null;
+                }
+            }
+        });
+    }
+
     public void speak(final String text, final String languageTag) {
         if (activity == null) {
             send("OnAndroidTtsError", "Android Activity 不可用。");

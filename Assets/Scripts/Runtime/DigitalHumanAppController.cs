@@ -9,7 +9,7 @@ namespace SrtpAvatar
     public sealed class DigitalHumanAppController : MonoBehaviour
     {
         [Header("Config")]
-        [SerializeField] private OpenAICompatibleConfig config;
+        [SerializeField] private AppConfig config;
 
         [Header("Scene References")]
         [SerializeField] private DigitalHumanAvatarBase avatarDriver;
@@ -21,6 +21,8 @@ namespace SrtpAvatar
         [SerializeField] private Text hintText;
 
         private DeepSeekDialogueClient deepSeekClient;
+        private ConversationMemory conversationMemory;
+        private LongTermMemoryStore longTermMemory;
         private bool busy;
         private bool nativeTtsDriving;
         private Coroutine nativeMouthRoutine;
@@ -39,6 +41,8 @@ namespace SrtpAvatar
             LoadConfigIfNeeded();
             EnsureRuntimeComponents();
             deepSeekClient = new DeepSeekDialogueClient(config);
+            conversationMemory = new ConversationMemory();
+            longTermMemory = new LongTermMemoryStore();
         }
 
         private void Start()
@@ -65,8 +69,10 @@ namespace SrtpAvatar
             {
                 var userText = await ListenForUserTextAsync();
                 var decision = await DecideReplyAsync(userText);
+                RememberConversation(userText, decision);
                 await PresentReplyAsync(decision);
-                ShowIdle();
+                SetState(AvatarState.idle, "空闲");
+                SetHint(ResolveStartupHint());
             }
             catch (Exception ex)
             {
@@ -89,7 +95,11 @@ namespace SrtpAvatar
             {
                 SetSubtitle("系统语音识别启动中，请说话...");
                 var timeout = config == null ? 20f : Mathf.Max(5f, config.speechRecognitionTimeoutSeconds);
-                var text = await WithTimeout(androidSpeech.RecognizeAsync(config.speechLanguage), timeout, "系统语音识别超时。");
+                var text = await WithTimeout(
+                    androidSpeech.RecognizeAsync(config.speechLanguage),
+                    timeout,
+                    "系统语音识别超时。",
+                    androidSpeech.CancelRecognition);
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     SetSubtitle($"你：{text}");
@@ -112,12 +122,52 @@ namespace SrtpAvatar
             SetState(AvatarState.thinking, "思考");
             SetSubtitle("正在理解你的语音...");
 
+            if (ConversationMemory.IsClearRequest(userText))
+            {
+                conversationMemory.Clear();
+                longTermMemory.Clear();
+                return new DialogueDecision
+                {
+                    reply = "记忆已经清除，我们可以重新开始。",
+                    emotion = "neutral",
+                    gesture = "nod",
+                    state = "speaking",
+                    carIntent = "none"
+                };
+            }
+
             if (!CanUseDeepSeek)
             {
                 return LocalDemoDialogue.Decide(userText);
             }
 
-            return await deepSeekClient.CompleteAsync(userText);
+            var recentContext = config.enableConversationMemory
+                ? conversationMemory.BuildContext(config.maxMemoryTurns)
+                : "";
+            var longTermContext = config.enableLongTermMemory
+                ? longTermMemory.BuildContext(config.maxLongTermMemories)
+                : "";
+
+            return await deepSeekClient.CompleteAsync(userText, recentContext, longTermContext);
+        }
+
+        private void RememberConversation(string userText, DialogueDecision decision)
+        {
+            if (decision == null || ConversationMemory.IsClearRequest(userText))
+            {
+                return;
+            }
+
+            var safeDecision = decision.Normalize();
+            if (config != null && config.enableConversationMemory)
+            {
+                conversationMemory.Add(userText, safeDecision, config.maxMemoryTurns);
+            }
+
+            if (config != null && config.enableLongTermMemory && longTermMemory.Remember(safeDecision.memory, config.maxLongTermMemories))
+            {
+                Debug.Log($"Long-term memory updated: {longTermMemory.FilePath}");
+            }
         }
 
         private async Task PresentReplyAsync(DialogueDecision decision)
@@ -215,7 +265,7 @@ namespace SrtpAvatar
         {
             if (config == null)
             {
-                config = Resources.Load<OpenAICompatibleConfig>("OpenAIConfig");
+                config = Resources.Load<AppConfig>("OpenAIConfig");
             }
         }
 
@@ -240,6 +290,11 @@ namespace SrtpAvatar
             {
                 audioSource = gameObject.AddComponent<AudioSource>();
             }
+
+            if (gameObject.GetComponent<ApiConfigPanel>() == null)
+            {
+                gameObject.AddComponent<ApiConfigPanel>();
+            }
         }
 
         private void ShowIdle()
@@ -260,14 +315,15 @@ namespace SrtpAvatar
 
         private string ResolveStartupHint()
         {
+            var memoryLabel = config != null && config.enableLongTermMemory ? "长期记忆已启用" : "长期记忆未启用";
             if (!CanUseDeepSeek)
             {
-                return "演示模式：未配置 DeepSeek Key，将使用本地模拟回复。";
+                return $"演示模式：未配置 DeepSeek Key，将使用本地模拟回复，{memoryLabel}。";
             }
 
             return CanUseAndroidSpeech
-                ? "云端模式：安卓系统语音 + DeepSeek LLM 已接入。"
-                : "DeepSeek 已配置：当前环境无安卓系统语音，将使用本地模拟输入和提示音。";
+                ? $"云端模式：安卓系统语音 + DeepSeek LLM 已接入，{memoryLabel}。"
+                : $"DeepSeek 已配置：当前环境无安卓系统语音，将使用本地模拟输入和提示音，{memoryLabel}。";
         }
 
         private float ResolveTtsTimeout(string reply)
@@ -340,6 +396,11 @@ namespace SrtpAvatar
 
         private static async Task<T> WithTimeout<T>(Task<T> task, float seconds, string timeoutMessage)
         {
+            return await WithTimeout(task, seconds, timeoutMessage, null);
+        }
+
+        private static async Task<T> WithTimeout<T>(Task<T> task, float seconds, string timeoutMessage, Action onTimeout)
+        {
             var timeout = DelaySeconds(seconds);
             var completed = await Task.WhenAny(task, timeout);
             if (completed == task)
@@ -347,6 +408,7 @@ namespace SrtpAvatar
                 return await task;
             }
 
+            onTimeout?.Invoke();
             throw new TimeoutException(timeoutMessage);
         }
 

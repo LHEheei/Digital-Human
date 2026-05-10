@@ -21,10 +21,10 @@ namespace SrtpAvatarEditor
             Directory.CreateDirectory("Assets/Scenes");
             Directory.CreateDirectory("Assets/Resources");
 
-            var config = AssetDatabase.LoadAssetAtPath<OpenAICompatibleConfig>(ConfigPath);
+            var config = AssetDatabase.LoadAssetAtPath<AppConfig>(ConfigPath);
             if (config == null)
             {
-                config = ScriptableObject.CreateInstance<OpenAICompatibleConfig>();
+                config = ScriptableObject.CreateInstance<AppConfig>();
                 AssetDatabase.CreateAsset(config, ConfigPath);
             }
 
@@ -37,6 +37,7 @@ namespace SrtpAvatarEditor
             var audioSource = controllerObject.AddComponent<AudioSource>();
             var androidSpeech = controllerObject.AddComponent<AndroidNativeSpeechBridge>();
             var controller = controllerObject.AddComponent<DigitalHumanAppController>();
+            controllerObject.AddComponent<ApiConfigPanel>();
             var testPanel = controllerObject.AddComponent<AvatarTestPanel>();
             var mobileLayout = controllerObject.AddComponent<MobilePresentationLayout>();
 
@@ -349,7 +350,7 @@ namespace SrtpAvatarEditor
 
         private static void WireController(
             DigitalHumanAppController controller,
-            OpenAICompatibleConfig config,
+            AppConfig config,
             DigitalHumanAvatarBase avatarDriver,
             AndroidNativeSpeechBridge androidSpeech,
             AudioSource audioSource,

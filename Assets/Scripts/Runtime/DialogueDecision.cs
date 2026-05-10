@@ -38,6 +38,7 @@ namespace SrtpAvatar
         public string gesture = "none";
         public string state = "speaking";
         public string carIntent = "none";
+        public string memory = "";
 
         public AvatarEmotion ParsedEmotion => ParseEnum(emotion, AvatarEmotion.neutral);
         public AvatarGesture ParsedGesture => ParseEnum(gesture, AvatarGesture.none);
@@ -73,6 +74,7 @@ namespace SrtpAvatar
             gesture = NormalizeEnum(gesture, AvatarGesture.none);
             state = NormalizeEnum(state, AvatarState.speaking);
             carIntent = string.IsNullOrWhiteSpace(carIntent) ? "none" : carIntent.Trim();
+            memory = string.IsNullOrWhiteSpace(memory) ? "" : memory.Trim();
             return this;
         }
 

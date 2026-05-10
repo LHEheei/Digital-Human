@@ -46,6 +46,18 @@ namespace SrtpAvatar
 #endif
         }
 
+        public void CancelRecognition()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (bridge != null)
+            {
+                bridge.Call("cancelRecognition");
+            }
+#endif
+            recognitionCompletion?.TrySetCanceled();
+            recognitionCompletion = null;
+        }
+
         public Task SpeakAsync(string text, string language)
         {
 #if UNITY_ANDROID && !UNITY_EDITOR

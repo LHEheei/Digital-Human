@@ -2,13 +2,20 @@ using UnityEngine;
 
 namespace SrtpAvatar
 {
-    [CreateAssetMenu(menuName = "SRTP/App Config", fileName = "OpenAIConfig")]
-    public sealed class OpenAICompatibleConfig : ScriptableObject
+    [CreateAssetMenu(menuName = "SRTP/App Config", fileName = "AppConfig")]
+    public sealed class AppConfig : ScriptableObject
     {
         [Header("DeepSeek Dialogue")]
         public string deepSeekBaseUrl = "https://api.deepseek.com";
         public string deepSeekApiKey = "";
         public string deepSeekModel = "deepseek-v4-flash";
+        public int deepSeekRequestTimeoutSeconds = 25;
+
+        [Header("Conversation Memory")]
+        public bool enableConversationMemory = true;
+        public int maxMemoryTurns = 6;
+        public bool enableLongTermMemory = true;
+        public int maxLongTermMemories = 20;
 
         [Header("Android Native Speech")]
         public bool preferAndroidNativeSpeech = true;
@@ -21,11 +28,11 @@ namespace SrtpAvatar
         public bool useLocalDemoWhenDeepSeekKeyMissing = true;
         public string localDemoUserText = "你好，请介绍一下你现在能做什么。";
 
-        public bool HasDeepSeekKey => !string.IsNullOrWhiteSpace(deepSeekApiKey);
+        public bool HasDeepSeekKey => !string.IsNullOrWhiteSpace(RuntimeSecrets.ResolveDeepSeekApiKey(this));
 
         public string DeepSeekUrl(string path)
         {
-            var root = string.IsNullOrWhiteSpace(deepSeekBaseUrl) ? "https://api.deepseek.com" : deepSeekBaseUrl.TrimEnd('/');
+            var root = RuntimeSecrets.ResolveDeepSeekBaseUrl(this).TrimEnd('/');
             return $"{root}/{path.TrimStart('/')}";
         }
     }

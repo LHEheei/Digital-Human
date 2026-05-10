@@ -2,7 +2,7 @@ namespace SrtpAvatar
 {
     public static class LocalDemoDialogue
     {
-        public static string UserText(OpenAICompatibleConfig config)
+        public static string UserText(AppConfig config)
         {
             return config == null || string.IsNullOrWhiteSpace(config.localDemoUserText)
                 ? "你好，请介绍一下你现在能做什么。"

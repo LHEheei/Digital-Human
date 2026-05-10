@@ -6,8 +6,9 @@ namespace SrtpAvatar
 {
     public static class UnityWebRequestUtil
     {
-        public static async Task SendAsync(UnityWebRequest request)
+        public static async Task SendAsync(UnityWebRequest request, int timeoutSeconds = 25)
         {
+            request.timeout = Math.Max(5, timeoutSeconds);
             var op = request.SendWebRequest();
             while (!op.isDone)
             {
