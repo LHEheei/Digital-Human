@@ -1,9 +1,13 @@
-using System.Collections;
 using UnityEngine;
+
+#if UNITY_EDITOR
+using System.Collections;
 using UnityEngine.UI;
+#endif
 
 namespace SrtpAvatar
 {
+#if UNITY_EDITOR
     public sealed class AvatarTestPanel : MonoBehaviour
     {
         [SerializeField] private DigitalHumanAvatarBase avatarDriver;
@@ -251,4 +255,9 @@ namespace SrtpAvatar
             speechRoutine = null;
         }
     }
+#else
+    public sealed class AvatarTestPanel : MonoBehaviour
+    {
+    }
+#endif
 }

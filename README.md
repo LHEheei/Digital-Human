@@ -10,12 +10,13 @@
 
 ```text
 DigitalHumanAppController.RunConversationAsync
--> AndroidNativeSpeechBridge.RecognizeAsync
--> DeepSeekDialogueClient.CompleteAsync
+-> SpeechService.ListenForUserTextAsync
+-> DialogueService.DecideAsync
+-> DeepSeekDialogueClient.CompleteAsync 或 LocalDemoDialogue.Decide
 -> DialogueDecision.Normalize
 -> ConversationMemory / LongTermMemoryStore
--> VrmAvatarBridge.SetEmotion / PlayGesture / SetSpeechLevel
--> AndroidNativeSpeechBridge.SpeakAsync
+-> AvatarSpeechDriver.SetEmotion / PlayGesture / SetSpeechLevel
+-> SpeechService.SpeakWithAndroidTtsAsync
 ```
 
 如果没有配置 DeepSeek Key，应用会进入本地演示模式，使用 `LocalDemoDialogue` 返回固定示例回复。
@@ -47,7 +48,16 @@ DeepSeek 每次会返回一个额外字段 `memory`。只有当用户主动透�
 
 - `DigitalHumanAppController`
   - App 主流程控制器。
-  - 负责组织“听用户说话、请求 DeepSeek、更新记忆、驱动数字人、语音播报”。
+  - 只负责编排“听、想、演、说”的顺序和 UI 状态。
+- `SpeechService`
+  - 语音输入和语音输出服务。
+  - 负责安卓系统语音识别、安卓系统 TTS，以及编辑器/无 Key 时的本地模拟输入。
+- `DialogueService`
+  - 对话决策服务。
+  - 负责在 DeepSeek 与本地演示兜底之间选择，并更新短期/长期记忆。
+- `AvatarSpeechDriver`
+  - 数字人表现驱动。
+  - 负责表情、动作、口型，以及 TTS 播放时的嘴部模拟。
 - `AndroidNativeSpeechBridge`
   - Unity C# 到 Android 原生语音能力的桥。
   - 调用系统语音识别和系统 TTS。
@@ -57,18 +67,28 @@ DeepSeek 每次会返回一个额外字段 `memory`。只有当用户主动透�
 - `DeepSeekDialogueClient`
   - 调用 DeepSeek `/chat/completions`。
   - 要求模型输出 `DialogueDecision` JSON。
+- `DialoguePrompt`
+  - 维护 DeepSeek 的系统提示词。
+  - 后续接入小车真实意图时，优先改这里。
+- `DialogueParser`
+  - 负责把 DeepSeek 返回内容解析成 `DialogueDecision`。
+  - `DialogueDecision` 本身只保留数据和枚举归一化。
 - `DialogueDecision`
   - DeepSeek 输出的数据结构。
   - 字段包括 `reply`、`emotion`、`gesture`、`state`、`carIntent`、`memory`。
 - `LongTermMemoryStore`
   - 本地长期记忆读写。
   - 使用 JSON 存在手机本地，不依赖云数据库。
+- `LocalDemoDialogue`
+  - 位于 `Assets/Scripts/Runtime/Demo/`。
+  - 只作为无 Key 或编辑器场景下的演示兜底。
 - `AppConfig`
   - 应用配置资产，对应 `Assets/Resources/OpenAIConfig.asset`。
 - `VrmAvatarBridge`
   - 驱动 VRM 模型表情、口型和基础肢体动作。
 - `AvatarTestPanel`
   - Unity 编辑器播放模式下的调试面板。
+  - APK 中只保留空壳组件，不生成调试 UI。
 
 ## 配置
 
