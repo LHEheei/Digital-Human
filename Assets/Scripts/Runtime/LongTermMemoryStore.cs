@@ -53,7 +53,7 @@ namespace SrtpAvatar
             for (var i = 0; i < parts.Length; i++)
             {
                 var text = NormalizeMemory(parts[i]);
-                if (string.IsNullOrWhiteSpace(text) || Contains(text))
+                if (string.IsNullOrWhiteSpace(text) || !MemoryFilter.ShouldRemember(text) || Contains(text))
                 {
                     continue;
                 }

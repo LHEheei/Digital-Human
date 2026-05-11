@@ -6,6 +6,18 @@ namespace SrtpAvatar
 {
     public sealed class ConversationMemory
     {
+        private static readonly string[] ClearRequestKeywords =
+        {
+            "清除记忆",
+            "清空记忆",
+            "清掉记忆",
+            "删除记忆",
+            "忘记我",
+            "忘记刚才",
+            "忘掉刚才",
+            "重新开始对话"
+        };
+
         private readonly List<Turn> turns = new List<Turn>();
 
         public int Count => turns.Count;
@@ -61,14 +73,15 @@ namespace SrtpAvatar
             }
 
             var text = userText.Trim();
-            return text.Contains("清除记忆")
-                || text.Contains("清空记忆")
-                || text.Contains("清掉记忆")
-                || text.Contains("删除记忆")
-                || text.Contains("忘记我")
-                || text.Contains("忘记刚才")
-                || text.Contains("忘掉刚才")
-                || text.Contains("重新开始对话");
+            for (var i = 0; i < ClearRequestKeywords.Length; i++)
+            {
+                if (text.Contains(ClearRequestKeywords[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void Trim(int maxTurns)

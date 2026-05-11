@@ -185,7 +185,9 @@ namespace SrtpAvatar
             var memoryLabel = config != null && config.enableLongTermMemory ? "长期记忆已启用" : "长期记忆未启用";
             if (!CanUseDeepSeek)
             {
-                return $"演示模式：未配置 DeepSeek Key，将使用本地模拟回复，{memoryLabel}。";
+                return speechService.CanUseAndroidSpeech
+                    ? $"演示模式：安卓语音输入 + 本地模拟回复，{memoryLabel}。"
+                    : $"演示模式：未配置 DeepSeek Key，将使用本地模拟回复，{memoryLabel}。";
             }
 
             return speechService.CanUseAndroidSpeech

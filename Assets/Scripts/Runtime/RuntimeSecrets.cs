@@ -9,6 +9,9 @@ namespace SrtpAvatar
         private const string DeepSeekSettingsFileName = "deepseek_api_settings.json";
         private const string DeepSeekEditorEnvName = "DEEPSEEK_API_KEY";
 
+        private static bool settingsLoaded;
+        private static DeepSeekApiSettings cachedSettings;
+
         public static string ResolveDeepSeekApiKey(AppConfig config)
         {
             var settings = LoadDeepSeekSettings();
@@ -69,6 +72,18 @@ namespace SrtpAvatar
 
         public static DeepSeekApiSettings LoadDeepSeekSettings()
         {
+            if (settingsLoaded)
+            {
+                return cachedSettings.Copy();
+            }
+
+            cachedSettings = ReadDeepSeekSettingsFile();
+            settingsLoaded = true;
+            return cachedSettings.Copy();
+        }
+
+        private static DeepSeekApiSettings ReadDeepSeekSettingsFile()
+        {
             var path = DeepSeekSettingsFilePath();
             if (!File.Exists(path))
             {
@@ -81,7 +96,7 @@ namespace SrtpAvatar
                 var settings = JsonUtility.FromJson<DeepSeekApiSettings>(json);
                 return settings == null ? new DeepSeekApiSettings() : settings.Normalize();
             }
-            catch (IOException ex)
+            catch (System.Exception ex)
             {
                 Debug.LogWarning($"Failed to read DeepSeek settings file: {ex.Message}");
                 return new DeepSeekApiSettings();
@@ -99,6 +114,8 @@ namespace SrtpAvatar
 
             Directory.CreateDirectory(Application.persistentDataPath);
             File.WriteAllText(DeepSeekSettingsFilePath(), JsonUtility.ToJson(settings, true));
+            cachedSettings = settings.Normalize();
+            settingsLoaded = true;
 
             var oldKeyPath = DeepSeekKeyFilePath();
             if (File.Exists(oldKeyPath))
@@ -111,6 +128,8 @@ namespace SrtpAvatar
         {
             DeleteIfExists(DeepSeekSettingsFilePath());
             DeleteIfExists(DeepSeekKeyFilePath());
+            cachedSettings = new DeepSeekApiSettings();
+            settingsLoaded = true;
         }
 
         public static string DeepSeekKeyFilePath()
@@ -163,6 +182,16 @@ namespace SrtpAvatar
             public string baseUrl = "";
             public string apiKey = "";
             public string model = "";
+
+            public DeepSeekApiSettings Copy()
+            {
+                return new DeepSeekApiSettings
+                {
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model
+                };
+            }
 
             public DeepSeekApiSettings Normalize()
             {

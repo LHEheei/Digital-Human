@@ -51,7 +51,8 @@ DeepSeek 每次会返回一个额外字段 `memory`。只有当用户主动透�
   - 只负责编排“听、想、演、说”的顺序和 UI 状态。
 - `SpeechService`
   - 语音输入和语音输出服务。
-  - 负责安卓系统语音识别、安卓系统 TTS，以及编辑器/无 Key 时的本地模拟输入。
+  - 负责安卓系统语音识别、安卓系统 TTS，以及编辑器中的本地模拟输入。
+  - 安卓真机上即使未配置 DeepSeek Key，也会优先使用系统语音识别，再走本地演示回复。
 - `DialogueService`
   - 对话决策服务。
   - 负责在 DeepSeek 与本地演示兜底之间选择，并更新短期/长期记忆。
@@ -79,6 +80,9 @@ DeepSeek 每次会返回一个额外字段 `memory`。只有当用户主动透�
 - `LongTermMemoryStore`
   - 本地长期记忆读写。
   - 使用 JSON 存在手机本地，不依赖云数据库。
+- `MemoryFilter`
+  - 长期记忆保存前的本地敏感信息过滤。
+  - 拦截 API Key、Token、密码、手机号、邮箱等不适合写入记忆的内容。
 - `LocalDemoDialogue`
   - 位于 `Assets/Scripts/Runtime/Demo/`。
   - 只作为无 Key 或编辑器场景下的演示兜底。
@@ -154,6 +158,8 @@ API Key: 你的 DeepSeek Key
 ```
 
 点“保存”后，下一次点击 `MIC` 就会使用本机保存的配置。点“清除”会删除本机 API 配置，应用会回到演示模式或 Inspector 中的备用配置。
+
+运行时会缓存本机 API 配置，保存或清除时自动刷新缓存，避免每次请求都重复读取配置文件。
 
 ## DeepSeek 输出格式
 

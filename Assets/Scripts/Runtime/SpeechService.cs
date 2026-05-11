@@ -17,7 +17,6 @@ namespace SrtpAvatar
 
         public bool CanUseAndroidSpeech =>
             config != null
-            && config.HasDeepSeekKey
             && config.preferAndroidNativeSpeech
             && androidSpeech != null
             && androidSpeech.IsAvailable;
