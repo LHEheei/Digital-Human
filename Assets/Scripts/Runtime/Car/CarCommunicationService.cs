@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -17,10 +18,15 @@ namespace SrtpAvatar
             this.bluetoothBridge = bluetoothBridge;
         }
 
-        public async Task<CarCommunicationResult> SendAsync(DialogueDecision decision)
+        public async Task<CarCommunicationResult> SendAsync(DialogueDecision decision, CancellationToken cancellationToken = default)
         {
             if (!CarCommand.TryFromDecision(decision, config, out var command))
             {
+                if (!CarCommand.IsNone(decision))
+                {
+                    throw new AppException(AppErr.car, "小车指令不在本地白名单中，已拒绝发送。");
+                }
+
                 return CarCommunicationResult.Hidden();
             }
 
@@ -35,22 +41,22 @@ namespace SrtpAvatar
                     Debug.Log($"Car command validated locally: {command.Intent}");
                     return CarCommunicationResult.Visible($"小车指令：{command.Intent}，日志模拟发送。");
                 case CarCommunicationMode.HttpPost:
-                    await SendHttpCommandAsync(command);
+                    await SendHttpCommandAsync(command, cancellationToken);
                     return CarCommunicationResult.Visible($"小车指令：{command.Intent}，HTTP 已发送。");
                 case CarCommunicationMode.AndroidBluetoothSpp:
-                    await SendBluetoothCommandAsync(command);
+                    await SendBluetoothCommandAsync(command, cancellationToken);
                     return CarCommunicationResult.Visible($"小车指令：{command.Intent}，蓝牙已发送。");
                 default:
                     return CarCommunicationResult.Visible($"小车指令已识别：{command.Intent}，通讯模式未支持。");
             }
         }
 
-        private async Task SendHttpCommandAsync(CarCommand command)
+        private async Task SendHttpCommandAsync(CarCommand command, CancellationToken cancellationToken)
         {
             if (!Uri.TryCreate(config.carHttpEndpoint, UriKind.Absolute, out var endpoint)
                 || !string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("小车 HTTP 地址必须配置为 HTTPS，明文 HTTP 已禁用。");
+                throw new AppException(AppErr.car, "小车 HTTP 地址必须配置为 HTTPS，明文 HTTP 已禁用。");
             }
 
             var body = JsonUtility.ToJson(new CarHttpCommand
@@ -64,14 +70,14 @@ namespace SrtpAvatar
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(body));
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
-            await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds());
+            await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds(), AppErr.car, false, cancellationToken);
         }
 
-        private async Task SendBluetoothCommandAsync(CarCommand command)
+        private async Task SendBluetoothCommandAsync(CarCommand command, CancellationToken cancellationToken)
         {
             if (bluetoothBridge == null)
             {
-                throw new InvalidOperationException("Android 蓝牙通讯桥未初始化。");
+                throw new AppException(AppErr.car, "Android 蓝牙通讯桥未初始化。");
             }
 
             var payload = command.Payload + DecodeSuffix(config.carBluetoothCommandSuffix);
@@ -79,7 +85,8 @@ namespace SrtpAvatar
                 config.carBluetoothDeviceName,
                 config.carBluetoothDeviceAddress,
                 payload,
-                ResolveTimeoutSeconds());
+                ResolveTimeoutSeconds(),
+                cancellationToken);
         }
 
         private int ResolveTimeoutSeconds()
@@ -90,6 +97,24 @@ namespace SrtpAvatar
         public void CancelPendingCommand()
         {
             bluetoothBridge?.CancelPendingCommand();
+        }
+
+        public CarExecutionOrder GetExecutionOrder(DialogueDecision decision)
+        {
+            if (CarCommand.IsNone(decision))
+            {
+                return CarExecutionOrder.none;
+            }
+
+            if (!CarCommand.TryFromDecision(decision, config, out var command))
+            {
+                // Keep an unknown candidate in the flow so SendAsync can reject it visibly.
+                return CarExecutionOrder.parallel;
+            }
+
+            return string.Equals(command.Intent, CarIntent.stop.ToString(), StringComparison.Ordinal)
+                ? CarExecutionOrder.immediate
+                : CarExecutionOrder.parallel;
         }
 
         private static string DecodeSuffix(string suffix)
@@ -109,6 +134,13 @@ namespace SrtpAvatar
             public string command;
             public long timestampMs;
         }
+    }
+
+    public enum CarExecutionOrder
+    {
+        none,
+        immediate,
+        parallel
     }
 
     public sealed class CarCommunicationResult
@@ -152,7 +184,13 @@ namespace SrtpAvatar
             return command.ShouldSend;
         }
 
-        private static string NormalizeIntent(string rawIntent)
+        public static bool IsNone(DialogueDecision decision)
+        {
+            return string.IsNullOrWhiteSpace(decision == null ? "" : decision.carIntent)
+                || string.Equals(decision.carIntent.Trim(), CarIntent.none.ToString(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string NormalizeIntent(string rawIntent)
         {
             if (string.IsNullOrWhiteSpace(rawIntent))
             {

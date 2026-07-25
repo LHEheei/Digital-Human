@@ -114,7 +114,7 @@ namespace SrtpAvatar
 
         public void OnAndroidSpeechResult(string callback)
         {
-            if (!TryReadCurrentCallback(callback, recognitionId, out var text))
+            if (!TryReadCallback(callback, recognitionId, out var text))
             {
                 return;
             }
@@ -124,7 +124,7 @@ namespace SrtpAvatar
 
         public void OnAndroidSpeechError(string callback)
         {
-            if (!TryReadCurrentCallback(callback, recognitionId, out var message))
+            if (!TryReadCallback(callback, recognitionId, out var message))
             {
                 return;
             }
@@ -134,7 +134,7 @@ namespace SrtpAvatar
 
         public void OnAndroidTtsStarted(string callback)
         {
-            if (TryReadCurrentCallback(callback, utteranceId, out _))
+            if (TryReadCallback(callback, utteranceId, out _))
             {
                 ttsSpeaking = true;
             }
@@ -142,7 +142,7 @@ namespace SrtpAvatar
 
         public void OnAndroidTtsDone(string callback)
         {
-            if (TryReadCurrentCallback(callback, utteranceId, out _))
+            if (TryReadCallback(callback, utteranceId, out _))
             {
                 CompleteTts(null);
             }
@@ -150,7 +150,7 @@ namespace SrtpAvatar
 
         public void OnAndroidTtsError(string callback)
         {
-            if (!TryReadCurrentCallback(callback, utteranceId, out var message))
+            if (!TryReadCallback(callback, utteranceId, out var message))
             {
                 return;
             }
@@ -199,7 +199,7 @@ namespace SrtpAvatar
             }
         }
 
-        private static bool TryReadCurrentCallback(string callback, string expectedId, out string payload)
+        public static bool TryReadCallback(string callback, string expectedId, out string payload)
         {
             payload = "";
             if (string.IsNullOrWhiteSpace(callback) || string.IsNullOrWhiteSpace(expectedId))

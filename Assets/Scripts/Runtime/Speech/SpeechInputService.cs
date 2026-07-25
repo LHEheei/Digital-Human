@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -19,18 +20,32 @@ namespace SrtpAvatar
 
         public bool CanRecognize => config != null && config.preferAndroidNativeSpeech && androidSpeech != null && androidSpeech.CanRecognize;
 
-        public async Task<string> ListenForUserTextAsync(Action<string> reportSubtitle)
+        public async Task<string> ListenForUserTextAsync(Action<string> reportSubtitle, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (CanRecognize)
             {
-                if (!await microphonePermission.EnsureGrantedAsync())
+                var permission = await microphonePermission.RequestAsync(cancellationToken);
+                if (permission != PermState.granted)
                 {
-                    throw new InvalidOperationException("未获得麦克风权限，无法开始语音识别。请在系统设置中允许麦克风权限后重试。");
+                    throw new AppException(AppErr.micPerm, PermissionMessage(permission));
                 }
 
                 reportSubtitle?.Invoke("系统语音识别启动中，请说话...");
                 var timeout = Mathf.Max(5f, config.speechRecognitionTimeoutSeconds);
-                var text = await TaskTimeout.WithTimeout(androidSpeech.RecognizeAsync(config.speechLanguage), timeout, "系统语音识别超时。", androidSpeech.CancelRecognition);
+                string text;
+                try
+                {
+                    text = await TaskTimeout.WithTimeout(androidSpeech.RecognizeAsync(config.speechLanguage), timeout, "系统语音识别超时。", androidSpeech.CancelRecognition, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new AppException(AppErr.speech, "系统语音识别失败。", ex);
+                }
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     var trimmed = text.Trim();
@@ -46,7 +61,25 @@ namespace SrtpAvatar
                 return demoText;
             }
 
-            throw new InvalidOperationException("当前设备没有可用的系统语音识别服务。");
+            throw new AppException(AppErr.speech, "当前设备没有可用的系统语音识别服务。");
+        }
+
+        public void Cancel()
+        {
+            androidSpeech?.CancelRecognition();
+        }
+
+        private static string PermissionMessage(PermState state)
+        {
+            switch (state)
+            {
+                case PermState.blocked:
+                    return "麦克风权限已被禁止，请前往系统设置开启。";
+                case PermState.timeout:
+                    return "麦克风权限请求超时，请重试。";
+                default:
+                    return "未获得麦克风权限，可重新授权后再试。";
+            }
         }
     }
 }

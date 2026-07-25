@@ -1,44 +1,57 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
-using UnityEngine;
 
 namespace SrtpAvatar
 {
     public static class TaskTimeout
     {
-        public static async Task<T> WithTimeout<T>(Task<T> task, float seconds, string timeoutMessage, Action onTimeout = null)
+        public static async Task<T> WithTimeout<T>(Task<T> task, float seconds, string timeoutMessage, Action onTimeout = null, CancellationToken cancellationToken = default)
         {
-            var timeout = DelaySeconds(seconds);
-            var completed = await Task.WhenAny(task, timeout);
-            if (completed == task)
+            if (task == null)
             {
-                return await task;
+                throw new ArgumentNullException(nameof(task));
             }
 
-            onTimeout?.Invoke();
-            throw new TimeoutException(timeoutMessage);
+            using (var timerCancellation = new CancellationTokenSource())
+            using (var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timerCancellation.Token))
+            {
+                var timeout = Task.Delay(TimeSpan.FromSeconds(Math.Max(0.1f, seconds)), linkedCancellation.Token);
+                var completed = await Task.WhenAny(task, timeout);
+                if (completed == task)
+                {
+                    timerCancellation.Cancel();
+                    return await task;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                onTimeout?.Invoke();
+                throw new TimeoutException(timeoutMessage);
+            }
         }
 
-        public static async Task WithTimeout(Task task, float seconds, string timeoutMessage, Action onTimeout = null)
+        public static async Task WithTimeout(Task task, float seconds, string timeoutMessage, Action onTimeout = null, CancellationToken cancellationToken = default)
         {
-            var timeout = DelaySeconds(seconds);
-            var completed = await Task.WhenAny(task, timeout);
-            if (completed == task)
+            if (task == null)
             {
-                await task;
-                return;
+                throw new ArgumentNullException(nameof(task));
             }
 
-            onTimeout?.Invoke();
-            throw new TimeoutException(timeoutMessage);
-        }
-
-        private static async Task DelaySeconds(float seconds)
-        {
-            var end = Time.realtimeSinceStartup + Mathf.Max(0.1f, seconds);
-            while (Time.realtimeSinceStartup < end)
+            using (var timerCancellation = new CancellationTokenSource())
+            using (var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timerCancellation.Token))
             {
-                await Task.Yield();
+                var timeout = Task.Delay(TimeSpan.FromSeconds(Math.Max(0.1f, seconds)), linkedCancellation.Token);
+                var completed = await Task.WhenAny(task, timeout);
+                if (completed == task)
+                {
+                    timerCancellation.Cancel();
+                    await task;
+                    return;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                onTimeout?.Invoke();
+                throw new TimeoutException(timeoutMessage);
             }
         }
     }

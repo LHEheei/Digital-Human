@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
@@ -24,7 +25,10 @@ namespace SrtpAvatar
         private DialogueService dialogueService;
         private CarCommunicationService carCommunicationService;
         private AvatarSpeechDriver avatarSpeechDriver;
+        private AppUi ui;
+        private CancellationTokenSource conversationCancellation;
         private bool busy;
+        private bool isDestroyed;
 
         private bool CanUseDeepSeek => config != null && config.HasDeepSeekKey;
 
@@ -35,6 +39,7 @@ namespace SrtpAvatar
             speechService = new SpeechService(config, androidSpeech);
             dialogueService = new DialogueService(config);
             carCommunicationService = new CarCommunicationService(config, androidCar);
+            ui = new AppUi(microphoneButton, statusText, subtitleText, hintText);
         }
 
         private void Start()
@@ -49,100 +54,143 @@ namespace SrtpAvatar
 
         public async Task RunConversationAsync()
         {
-            if (busy)
+            if (busy || isDestroyed)
             {
                 return;
             }
 
             busy = true;
             SetButtonInteractable(false);
+            conversationCancellation?.Cancel();
+            conversationCancellation?.Dispose();
+            conversationCancellation = new CancellationTokenSource();
+            var cancellationToken = conversationCancellation.Token;
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 SetState(AvatarState.listening, "倾听");
                 SetSubtitle("请说话...");
 
-                var userText = await speechService.ListenForUserTextAsync(SetSubtitle);
+                var userText = await speechService.ListenForUserTextAsync(SetSubtitle, cancellationToken);
 
+                cancellationToken.ThrowIfCancellationRequested();
                 SetState(AvatarState.thinking, "思考");
                 SetSubtitle("正在理解你的语音...");
 
-                var decision = await dialogueService.DecideAsync(userText);
-                var finalHint = await PresentReplyAsync(decision);
+                var decision = await dialogueService.DecideAsync(new TalkInput { text = userText }, cancellationToken);
+                var finalHint = await PresentReplyAsync(decision, cancellationToken);
 
+                cancellationToken.ThrowIfCancellationRequested();
                 SetState(AvatarState.idle, "空闲");
                 SetHint(string.IsNullOrWhiteSpace(finalHint) ? ResolveStartupHint() : finalHint);
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.Log("Conversation canceled.");
+            }
+            catch (AppException ex)
+            {
+                Debug.LogException(ex);
+                ShowRecoverableError(ex.Error);
             }
             catch (Exception ex)
             {
                 Debug.LogException(ex);
-                ShowRecoverableError(ex.Message);
+                ShowRecoverableError(AppErr.unknown);
             }
             finally
             {
-                SetButtonInteractable(true);
+                if (!isDestroyed)
+                {
+                    SetButtonInteractable(true);
+                }
+
                 busy = false;
+                if (conversationCancellation != null && conversationCancellation.Token == cancellationToken)
+                {
+                    conversationCancellation.Dispose();
+                    conversationCancellation = null;
+                }
             }
         }
 
-        private async Task<string> PresentReplyAsync(DialogueDecision decision)
+        private async Task<string> PresentReplyAsync(DialogueDecision decision, CancellationToken cancellationToken)
         {
             var safeDecision = decision == null ? new DialogueDecision() : decision.Normalize();
+            cancellationToken.ThrowIfCancellationRequested();
 
             avatarSpeechDriver.SetEmotion(safeDecision.ParsedEmotion);
             avatarSpeechDriver.PlayGesture(safeDecision.ParsedGesture);
             SetState(AvatarState.speaking, "说话");
             SetSubtitle(safeDecision.reply);
-            SetHint($"emotion={safeDecision.emotion}  gesture={safeDecision.gesture}  carIntent={safeDecision.carIntent}");
-            var carTask = SendCarIntentAsync(safeDecision);
+            SetHint($"表情：{safeDecision.emotion} · 动作：{safeDecision.gesture}");
+            var carTask = RunCarCommandAsync(safeDecision, cancellationToken);
 
             if (speechService.CanSpeak)
             {
-                await SpeakWithAndroidTtsAsync(safeDecision.reply);
-                return await ShowCarCommunicationResultAsync(carTask);
+                await SpeakWithAndroidTtsAsync(safeDecision.reply, cancellationToken);
+                return await carTask;
             }
 
-            await avatarSpeechDriver.PlayFallbackToneAsync(safeDecision.reply);
-            return await ShowCarCommunicationResultAsync(carTask);
+            await avatarSpeechDriver.PlayFallbackToneAsync(safeDecision.reply, cancellationToken);
+            return await carTask;
         }
 
-        private async Task<string> SendCarIntentAsync(DialogueDecision decision)
+        private async Task<string> RunCarCommandAsync(DialogueDecision decision, CancellationToken cancellationToken)
         {
+            var order = carCommunicationService.GetExecutionOrder(decision);
+            if (order == CarExecutionOrder.none)
+            {
+                return "";
+            }
+
+            SetHint(order == CarExecutionOrder.immediate ? "小车：正在紧急停止" : "小车：正在执行指令");
             try
             {
-                var result = await carCommunicationService.SendAsync(decision);
+                var result = await carCommunicationService.SendAsync(decision, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (result.ShouldDisplay)
+                {
+                    SetHint(result.Message);
+                }
+
                 return result.ShouldDisplay ? result.Message : "";
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (AppException ex)
+            {
+                Debug.LogWarning($"Car communication failed: {ex.Message}");
+                SetHint("小车指令执行失败。");
+                return "小车指令执行失败。";
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"Car communication failed: {ex.Message}");
-                return $"小车通讯失败：{ex.Message}";
+                SetHint("小车指令执行失败。");
+                return "小车指令执行失败。";
             }
         }
 
-        private async Task<string> ShowCarCommunicationResultAsync(Task<string> carTask)
-        {
-            var message = await carTask;
-            if (!string.IsNullOrWhiteSpace(message))
-            {
-                SetHint(message);
-            }
-
-            return message;
-        }
-
-        private async Task SpeakWithAndroidTtsAsync(string reply)
+        private async Task SpeakWithAndroidTtsAsync(string reply, CancellationToken cancellationToken)
         {
             try
             {
                 avatarSpeechDriver.StartNativeSpeechMouth();
-                await speechService.SpeakWithAndroidTtsAsync(reply);
+                await speechService.SpeakWithAndroidTtsAsync(reply, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 Debug.LogWarning($"Android native TTS failed, falling back to local tone: {ex.Message}");
-                SetHint($"系统 TTS 播报失败，已用本地提示音替代。{ex.Message}");
-                await avatarSpeechDriver.PlayFallbackToneAsync(reply);
+                SetHint("系统 TTS 不可用，已改用本地提示音。");
+                await avatarSpeechDriver.PlayFallbackToneAsync(reply, cancellationToken);
             }
             finally
             {
@@ -216,88 +264,77 @@ namespace SrtpAvatar
             SetHint(ResolveStartupHint());
         }
 
-        private void ShowRecoverableError(string message)
+        private void ShowRecoverableError(AppErr error)
         {
             avatarSpeechDriver.SetEmotion(AvatarEmotion.sorrow);
             avatarSpeechDriver.PlayGesture(AvatarGesture.nod);
             SetState(AvatarState.idle, "空闲");
-            SetSubtitle(ToUserFacingError(message));
-            SetHint("请检查麦克风权限、网络和 API 设置后重试。");
+            SetSubtitle(ToUserFacingError(error));
+            SetHint(ResolveErrorHint(error));
         }
 
         private string ResolveStartupHint()
         {
-            var memoryLabel = config != null && config.enableLongTermMemory ? "长期记忆已启用" : "长期记忆未启用";
-            if (!CanUseDeepSeek)
-            {
-                return speechService.CanRecognize
-                    ? $"演示模式：安卓语音输入 + 本地模拟回复，{memoryLabel}。"
-                    : $"演示模式：未配置 DeepSeek Key，将使用本地模拟回复，{memoryLabel}。";
-            }
-
-            return speechService.CanRecognize
-                ? $"云端模式：安卓系统语音 + DeepSeek LLM 已接入，{memoryLabel}。"
-                : $"DeepSeek 已配置：当前环境无安卓系统语音，将使用本地模拟输入和提示音，{memoryLabel}。";
+            var input = speechService.CanRecognize ? "输入：Android ASR" : "输入：本地模拟";
+            var output = speechService.CanSpeak ? "输出：Android TTS" : "输出：本地提示音";
+            var dialogue = CanUseDeepSeek ? "对话：DeepSeek" : "对话：本地演示";
+            var memory = config != null && config.enableLongTermMemory ? "记忆：启用" : "记忆：关闭";
+            var car = config != null && config.enableCarCommunication && config.carCommunicationMode != CarCommunicationMode.Disabled ? "小车：启用" : "小车：关闭";
+            return $"{input} · {output}\n{dialogue} · {memory} · {car}";
         }
 
         private void SetState(AvatarState state, string label)
         {
             avatarSpeechDriver.SetState(state);
 
-            if (statusText != null)
-            {
-                statusText.text = label;
-            }
+            ui?.SetStatus(label);
         }
 
         private void SetSubtitle(string message)
         {
-            if (subtitleText != null)
-            {
-                subtitleText.text = message;
-            }
+            ui?.SetSubtitle(message);
         }
 
         private void SetHint(string message)
         {
-            if (hintText != null)
-            {
-                hintText.text = message;
-            }
+            ui?.SetHint(message);
         }
 
         private void SetButtonInteractable(bool interactable)
         {
-            if (microphoneButton != null)
-            {
-                microphoneButton.interactable = interactable;
-            }
+            ui?.SetMicrophoneInteractable(interactable);
         }
 
         private void OnDestroy()
         {
-            speechService?.Output.Stop();
+            isDestroyed = true;
+            conversationCancellation?.Cancel();
+            conversationCancellation?.Dispose();
+            conversationCancellation = null;
+            speechService?.CancelAll();
             carCommunicationService?.CancelPendingCommand();
+            avatarSpeechDriver?.StopAll();
         }
 
-        private static string ToUserFacingError(string message)
+        private static string ToUserFacingError(AppErr error)
         {
-            if (!string.IsNullOrWhiteSpace(message) && message.Contains("麦克风权限"))
+            switch (error)
             {
-                return "未获得麦克风权限，请授权后重试。";
+                case AppErr.micPerm: return "麦克风权限未开启。";
+                case AppErr.speech: return "语音识别失败，请重试。";
+                case AppErr.tts: return "语音播报失败，已切换提示音。";
+                case AppErr.network: return "网络连接失败，请稍后重试。";
+                case AppErr.auth: return "API 认证失败，请检查设置。";
+                case AppErr.badJson: return "对话服务返回格式异常。";
+                case AppErr.config: return "API 配置无效，请检查设置。";
+                case AppErr.car: return "小车通讯失败。";
+                default: return "连接或语音交互失败，请稍后重试。";
             }
+        }
 
-            if (!string.IsNullOrWhiteSpace(message) && message.Contains("JSON"))
-            {
-                return "对话服务返回格式异常，请稍后重试。";
-            }
-
-            if (!string.IsNullOrWhiteSpace(message) && (message.Contains("网络") || message.Contains("HTTP")))
-            {
-                return "网络连接失败，请检查网络后重试。";
-            }
-
-            return "连接或语音交互失败，请检查权限、网络和 API 设置。";
+        private static string ResolveErrorHint(AppErr error)
+        {
+            return error == AppErr.micPerm ? "可重新授权；若已禁止，请前往系统设置开启。" : "请检查网络、设备状态和 API 设置。";
         }
     }
 }

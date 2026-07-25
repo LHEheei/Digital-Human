@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -14,7 +15,7 @@ namespace SrtpAvatar
         private AndroidJavaObject bridge;
 #endif
 
-        public Task SendCommandAsync(string deviceName, string deviceAddress, string command, float timeoutSeconds)
+        public Task SendCommandAsync(string deviceName, string deviceAddress, string command, float timeoutSeconds, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(command))
             {
@@ -25,14 +26,14 @@ namespace SrtpAvatar
             EnsureBridge();
             if (bridge == null)
             {
-                throw new InvalidOperationException("Android 蓝牙小车桥接初始化失败。");
+                throw new AppException(AppErr.car, "Android 蓝牙小车桥接初始化失败。");
             }
 
             CancelPendingCommand();
             commandId = Guid.NewGuid().ToString("N");
             sendCompletion = new TaskCompletionSource<bool>();
             bridge.Call("sendCommand", deviceName ?? "", deviceAddress ?? "", command, commandId);
-            return TaskTimeout.WithTimeout(sendCompletion.Task, timeoutSeconds, "小车蓝牙通讯超时。", CancelPendingCommand);
+            return TaskTimeout.WithTimeout(sendCompletion.Task, timeoutSeconds, "小车蓝牙通讯超时。", CancelPendingCommand, cancellationToken);
 #else
             Debug.Log($"Android Bluetooth car command simulated: {command.Trim()}");
             return Task.CompletedTask;
@@ -55,7 +56,7 @@ namespace SrtpAvatar
 
         public void OnAndroidCarCommandSent(string callback)
         {
-            if (!TryReadCurrentCallback(callback, commandId, out _))
+            if (!TryReadCallback(callback, commandId, out _))
             {
                 return;
             }
@@ -67,12 +68,12 @@ namespace SrtpAvatar
 
         public void OnAndroidCarCommandError(string callback)
         {
-            if (!TryReadCurrentCallback(callback, commandId, out var message))
+            if (!TryReadCallback(callback, commandId, out var message))
             {
                 return;
             }
 
-            sendCompletion?.TrySetException(new InvalidOperationException(string.IsNullOrWhiteSpace(message) ? "小车蓝牙通讯失败。" : message));
+            sendCompletion?.TrySetException(new AppException(AppErr.car, string.IsNullOrWhiteSpace(message) ? "小车蓝牙通讯失败。" : message));
             sendCompletion = null;
             commandId = null;
         }
@@ -89,7 +90,7 @@ namespace SrtpAvatar
 #endif
         }
 
-        private static bool TryReadCurrentCallback(string callback, string expectedId, out string payload)
+        public static bool TryReadCallback(string callback, string expectedId, out string payload)
         {
             payload = "";
             if (string.IsNullOrWhiteSpace(callback) || string.IsNullOrWhiteSpace(expectedId))

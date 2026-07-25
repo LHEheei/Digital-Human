@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -17,14 +18,20 @@ namespace SrtpAvatar
         public bool CanRecognize => Input.CanRecognize;
         public bool CanSpeak => Output.CanSpeak;
 
-        public Task<string> ListenForUserTextAsync(Action<string> reportSubtitle)
+        public Task<string> ListenForUserTextAsync(Action<string> reportSubtitle, CancellationToken cancellationToken = default)
         {
-            return Input.ListenForUserTextAsync(reportSubtitle);
+            return Input.ListenForUserTextAsync(reportSubtitle, cancellationToken);
         }
 
-        public Task SpeakWithAndroidTtsAsync(string reply)
+        public Task SpeakWithAndroidTtsAsync(string reply, CancellationToken cancellationToken = default)
         {
-            return Output.SpeakAsync(reply);
+            return Output.SpeakAsync(reply, cancellationToken);
+        }
+
+        public void CancelAll()
+        {
+            Input.Cancel();
+            Output.Stop();
         }
     }
 }

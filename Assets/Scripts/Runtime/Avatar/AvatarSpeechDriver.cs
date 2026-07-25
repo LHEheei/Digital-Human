@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -57,7 +58,7 @@ namespace SrtpAvatar
             SetSpeechLevel(0f);
         }
 
-        public async Task PlayFallbackToneAsync(string reply)
+        public async Task PlayFallbackToneAsync(string reply, CancellationToken cancellationToken = default)
         {
             if (audioSource == null)
             {
@@ -71,12 +72,27 @@ namespace SrtpAvatar
             audioSource.Play();
             StartCoroutine(DriveMouthFromAudio());
 
-            while (audioSource.isPlaying)
+            try
             {
-                await Task.Yield();
+                while (audioSource.isPlaying)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Yield();
+                }
             }
+            finally
+            {
+                SetSpeechLevel(0f);
+            }
+        }
 
-            SetSpeechLevel(0f);
+        public void StopAll()
+        {
+            StopNativeSpeechMouth();
+            if (audioSource != null)
+            {
+                audioSource.Stop();
+            }
         }
 
         private IEnumerator DriveMouthFromAudio()
