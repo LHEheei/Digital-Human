@@ -19,7 +19,7 @@ namespace SrtpAvatar
             throw new TimeoutException(timeoutMessage);
         }
 
-        public static async Task WithTimeout(Task task, float seconds, string timeoutMessage)
+        public static async Task WithTimeout(Task task, float seconds, string timeoutMessage, Action onTimeout = null)
         {
             var timeout = DelaySeconds(seconds);
             var completed = await Task.WhenAny(task, timeout);
@@ -29,6 +29,7 @@ namespace SrtpAvatar
                 return;
             }
 
+            onTimeout?.Invoke();
             throw new TimeoutException(timeoutMessage);
         }
 

@@ -31,7 +31,6 @@ namespace SrtpAvatar
                     reply = "记忆已经清除，我们可以重新开始。",
                     emotion = "neutral",
                     gesture = "nod",
-                    state = "speaking",
                     carIntent = "none"
                 };
             }

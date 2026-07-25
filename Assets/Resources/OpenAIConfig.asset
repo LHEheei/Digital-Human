@@ -1,0 +1,43 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ddb38cf31c74e734480cf0bf48a7f527, type: 3}
+  m_Name: OpenAIConfig
+  m_EditorClassIdentifier: Assembly-CSharp::SrtpAvatar.AppConfig
+  deepSeekBaseUrl: https://api.deepseek.com
+  deepSeekApiKey:
+  deepSeekModel: deepseek-v4-flash
+  deepSeekRequestTimeoutSeconds: 25
+  enableConversationMemory: 1
+  maxMemoryTurns: 6
+  enableLongTermMemory: 1
+  maxLongTermMemories: 20
+  preferAndroidNativeSpeech: 1
+  speechLanguage: zh-CN
+  speechRecognitionTimeoutSeconds: 20
+  ttsBaseTimeoutSeconds: 5
+  ttsSecondsPerCharacter: 0.25
+  enableCarCommunication: 0
+  carCommunicationMode: 1
+  carHttpEndpoint:
+  carBluetoothDeviceName: HC-05
+  carBluetoothDeviceAddress:
+  carCommunicationTimeoutSeconds: 8
+  carCommandForward: F
+  carCommandBackward: B
+  carCommandLeft: L
+  carCommandRight: R
+  carCommandStop: S
+  carCommandSpeedUp: U
+  carCommandSlowDown: D
+  carBluetoothCommandSuffix: \n
+  useLocalDemoWhenDeepSeekKeyMissing: 1
+  localDemoUserText: "\u4F60\u662F\u8C01"

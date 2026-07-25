@@ -24,6 +24,22 @@ namespace SrtpAvatar
         public float ttsBaseTimeoutSeconds = 5f;
         public float ttsSecondsPerCharacter = 0.25f;
 
+        [Header("Car Communication")]
+        public bool enableCarCommunication = false;
+        public CarCommunicationMode carCommunicationMode = CarCommunicationMode.LogOnly;
+        public string carHttpEndpoint = "";
+        public string carBluetoothDeviceName = "HC-05";
+        public string carBluetoothDeviceAddress = "";
+        public int carCommunicationTimeoutSeconds = 8;
+        public string carCommandForward = "F";
+        public string carCommandBackward = "B";
+        public string carCommandLeft = "L";
+        public string carCommandRight = "R";
+        public string carCommandStop = "S";
+        public string carCommandSpeedUp = "U";
+        public string carCommandSlowDown = "D";
+        public string carBluetoothCommandSuffix = "\\n";
+
         [Header("Demo Mode")]
         public bool useLocalDemoWhenDeepSeekKeyMissing = true;
         public string localDemoUserText = "你好，请介绍一下你现在能做什么。";

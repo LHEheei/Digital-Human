@@ -87,7 +87,7 @@ namespace SrtpAvatar
             rect.anchorMax = new Vector2(0f, 1f);
             rect.pivot = new Vector2(0f, 1f);
             rect.anchoredPosition = new Vector2(24f, -24f);
-            rect.sizeDelta = new Vector2(320f, 310f);
+            rect.sizeDelta = new Vector2(390f, 310f);
 
             var image = panelRoot.AddComponent<Image>();
             image.color = PanelColor;
@@ -115,6 +115,7 @@ namespace SrtpAvatar
             var gestureRow = AddRow("Gesture Row");
             AddButton(gestureRow, "\u70b9\u5934", () => PlayGesture(AvatarGesture.nod), ButtonColor);
             AddButton(gestureRow, "\u6325\u624b", () => PlayGesture(AvatarGesture.wave), ButtonColor);
+            AddButton(gestureRow, "\u601d\u8003", () => PlayGesture(AvatarGesture.think), ButtonColor);
             AddButton(gestureRow, "\u89e3\u91ca", () => PlayGesture(AvatarGesture.explain), ButtonColor);
 
             var speechRow = AddRow("Speech Row");

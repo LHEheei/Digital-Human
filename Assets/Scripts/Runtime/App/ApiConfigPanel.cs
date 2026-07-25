@@ -39,6 +39,10 @@ namespace SrtpAvatar
             if (config == null)
             {
                 config = Resources.Load<AppConfig>("OpenAIConfig");
+                if (config == null)
+                {
+                    config = ScriptableObject.CreateInstance<AppConfig>();
+                }
             }
         }
 
@@ -171,14 +175,21 @@ namespace SrtpAvatar
             var baseUrl = string.IsNullOrWhiteSpace(baseUrlInput.text) ? RuntimeSecrets.ResolveDeepSeekBaseUrl(config) : baseUrlInput.text.Trim();
             var model = string.IsNullOrWhiteSpace(modelInput.text) ? RuntimeSecrets.ResolveDeepSeekModel(config) : modelInput.text.Trim();
 
+            if (!RuntimeSecrets.TryNormalizeDeepSeekBaseUrl(baseUrl, out var safeBaseUrl, out var warning, out var error))
+            {
+                SetFeedback(error);
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(existing.apiKey))
             {
                 key = existing.apiKey;
             }
 
-            RuntimeSecrets.SaveDeepSeekSettings(baseUrl, key, model);
+            RuntimeSecrets.SaveDeepSeekSettings(safeBaseUrl, key, model);
             apiKeyInput.text = "";
-            SetFeedback(string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时会继续使用演示模式。" : "已保存 API 配置，重新点击 MIC 即可使用。");
+            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时会继续使用演示模式。" : "已保存 API 配置，重新点击 MIC 即可使用。";
+            SetFeedback(string.IsNullOrWhiteSpace(warning) ? saved : $"{saved}\n警告：{warning}");
         }
 
         private void ClearSettings()

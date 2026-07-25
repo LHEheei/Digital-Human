@@ -13,6 +13,7 @@ namespace SrtpAvatar
         [Header("Scene References")]
         [SerializeField] private DigitalHumanAvatarBase avatarDriver;
         [SerializeField] private AndroidNativeSpeechBridge androidSpeech;
+        [SerializeField] private AndroidBluetoothCarBridge androidCar;
         [SerializeField] private AudioSource audioSource;
         [SerializeField] private Button microphoneButton;
         [SerializeField] private Text statusText;
@@ -21,6 +22,7 @@ namespace SrtpAvatar
 
         private SpeechService speechService;
         private DialogueService dialogueService;
+        private CarCommunicationService carCommunicationService;
         private AvatarSpeechDriver avatarSpeechDriver;
         private bool busy;
 
@@ -32,6 +34,7 @@ namespace SrtpAvatar
             EnsureRuntimeComponents();
             speechService = new SpeechService(config, androidSpeech);
             dialogueService = new DialogueService(config);
+            carCommunicationService = new CarCommunicationService(config, androidCar);
         }
 
         private void Start()
@@ -65,10 +68,10 @@ namespace SrtpAvatar
                 SetSubtitle("正在理解你的语音...");
 
                 var decision = await dialogueService.DecideAsync(userText);
-                await PresentReplyAsync(decision);
+                var finalHint = await PresentReplyAsync(decision);
 
                 SetState(AvatarState.idle, "空闲");
-                SetHint(ResolveStartupHint());
+                SetHint(string.IsNullOrWhiteSpace(finalHint) ? ResolveStartupHint() : finalHint);
             }
             catch (Exception ex)
             {
@@ -82,7 +85,7 @@ namespace SrtpAvatar
             }
         }
 
-        private async Task PresentReplyAsync(DialogueDecision decision)
+        private async Task<string> PresentReplyAsync(DialogueDecision decision)
         {
             var safeDecision = decision == null ? new DialogueDecision() : decision.Normalize();
 
@@ -91,14 +94,41 @@ namespace SrtpAvatar
             SetState(AvatarState.speaking, "说话");
             SetSubtitle(safeDecision.reply);
             SetHint($"emotion={safeDecision.emotion}  gesture={safeDecision.gesture}  carIntent={safeDecision.carIntent}");
+            var carTask = SendCarIntentAsync(safeDecision);
 
-            if (speechService.CanUseAndroidSpeech)
+            if (speechService.CanSpeak)
             {
                 await SpeakWithAndroidTtsAsync(safeDecision.reply);
-                return;
+                return await ShowCarCommunicationResultAsync(carTask);
             }
 
             await avatarSpeechDriver.PlayFallbackToneAsync(safeDecision.reply);
+            return await ShowCarCommunicationResultAsync(carTask);
+        }
+
+        private async Task<string> SendCarIntentAsync(DialogueDecision decision)
+        {
+            try
+            {
+                var result = await carCommunicationService.SendAsync(decision);
+                return result.ShouldDisplay ? result.Message : "";
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Car communication failed: {ex.Message}");
+                return $"小车通讯失败：{ex.Message}";
+            }
+        }
+
+        private async Task<string> ShowCarCommunicationResultAsync(Task<string> carTask)
+        {
+            var message = await carTask;
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                SetHint(message);
+            }
+
+            return message;
         }
 
         private async Task SpeakWithAndroidTtsAsync(string reply)
@@ -125,6 +155,11 @@ namespace SrtpAvatar
             if (config == null)
             {
                 config = Resources.Load<AppConfig>("OpenAIConfig");
+                if (config == null)
+                {
+                    config = ScriptableObject.CreateInstance<AppConfig>();
+                    Debug.LogWarning("未找到 OpenAIConfig.asset，已使用不含 Key 的默认演示配置。");
+                }
             }
         }
 
@@ -138,6 +173,16 @@ namespace SrtpAvatar
             if (androidSpeech == null)
             {
                 androidSpeech = gameObject.AddComponent<AndroidNativeSpeechBridge>();
+            }
+
+            if (androidCar == null)
+            {
+                androidCar = gameObject.GetComponent<AndroidBluetoothCarBridge>();
+            }
+
+            if (androidCar == null)
+            {
+                androidCar = gameObject.AddComponent<AndroidBluetoothCarBridge>();
             }
 
             if (audioSource == null)
@@ -176,8 +221,8 @@ namespace SrtpAvatar
             avatarSpeechDriver.SetEmotion(AvatarEmotion.sorrow);
             avatarSpeechDriver.PlayGesture(AvatarGesture.nod);
             SetState(AvatarState.idle, "空闲");
-            SetSubtitle("连接或语音交互失败，请检查权限、网络和 DeepSeek 配置。");
-            SetHint(message);
+            SetSubtitle(ToUserFacingError(message));
+            SetHint("请检查麦克风权限、网络和 API 设置后重试。");
         }
 
         private string ResolveStartupHint()
@@ -185,12 +230,12 @@ namespace SrtpAvatar
             var memoryLabel = config != null && config.enableLongTermMemory ? "长期记忆已启用" : "长期记忆未启用";
             if (!CanUseDeepSeek)
             {
-                return speechService.CanUseAndroidSpeech
+                return speechService.CanRecognize
                     ? $"演示模式：安卓语音输入 + 本地模拟回复，{memoryLabel}。"
                     : $"演示模式：未配置 DeepSeek Key，将使用本地模拟回复，{memoryLabel}。";
             }
 
-            return speechService.CanUseAndroidSpeech
+            return speechService.CanRecognize
                 ? $"云端模式：安卓系统语音 + DeepSeek LLM 已接入，{memoryLabel}。"
                 : $"DeepSeek 已配置：当前环境无安卓系统语音，将使用本地模拟输入和提示音，{memoryLabel}。";
         }
@@ -227,6 +272,32 @@ namespace SrtpAvatar
             {
                 microphoneButton.interactable = interactable;
             }
+        }
+
+        private void OnDestroy()
+        {
+            speechService?.Output.Stop();
+            carCommunicationService?.CancelPendingCommand();
+        }
+
+        private static string ToUserFacingError(string message)
+        {
+            if (!string.IsNullOrWhiteSpace(message) && message.Contains("麦克风权限"))
+            {
+                return "未获得麦克风权限，请授权后重试。";
+            }
+
+            if (!string.IsNullOrWhiteSpace(message) && message.Contains("JSON"))
+            {
+                return "对话服务返回格式异常，请稍后重试。";
+            }
+
+            if (!string.IsNullOrWhiteSpace(message) && (message.Contains("网络") || message.Contains("HTTP")))
+            {
+                return "网络连接失败，请检查网络后重试。";
+            }
+
+            return "连接或语音交互失败，请检查权限、网络和 API 设置。";
         }
     }
 }

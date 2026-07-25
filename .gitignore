@@ -7,6 +7,7 @@
 [Uu]ser[Ss]ettings/
 .unity-local/
 .utmp/
+.codex-remote-attachments/
 *.csproj
 *.sln
 *.user
@@ -23,5 +24,3 @@
 *.log
 sysinfo.txt
 crashlytics-build.properties
-Assets/Resources/OpenAIConfig.asset
-Assets/Resources/OpenAIConfig.asset.meta

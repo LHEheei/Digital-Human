@@ -17,8 +17,7 @@ namespace SrtpAvatar
 
             if (request.result != UnityWebRequest.Result.Success)
             {
-                var body = request.downloadHandler == null ? "" : request.downloadHandler.text;
-                throw new InvalidOperationException($"{request.responseCode} {request.error}\n{body}");
+                throw new InvalidOperationException($"HTTP {request.responseCode}: {request.error}");
             }
         }
     }

@@ -53,8 +53,14 @@ namespace SrtpAvatar
             for (var i = 0; i < parts.Length; i++)
             {
                 var text = NormalizeMemory(parts[i]);
-                if (string.IsNullOrWhiteSpace(text) || !MemoryFilter.ShouldRemember(text) || Contains(text))
+                if (string.IsNullOrWhiteSpace(text) || !MemoryFilter.ShouldRemember(text))
                 {
+                    continue;
+                }
+
+                if (Contains(text))
+                {
+                    changed = true;
                     continue;
                 }
 
@@ -72,7 +78,7 @@ namespace SrtpAvatar
                 return false;
             }
 
-            Trim(maxItems);
+            changed |= Trim(maxItems);
             Save();
             return true;
         }
@@ -94,7 +100,13 @@ namespace SrtpAvatar
 
                 var json = File.ReadAllText(filePath, Encoding.UTF8);
                 var loaded = JsonUtility.FromJson<MemoryData>(json);
-                return loaded == null || loaded.items == null ? new MemoryData() : loaded;
+                if (loaded == null || loaded.items == null)
+                {
+                    Debug.LogWarning("Long-term memory file is empty or invalid; a new memory store will be used.");
+                    return new MemoryData();
+                }
+
+                return loaded;
             }
             catch (Exception ex)
             {
@@ -130,13 +142,17 @@ namespace SrtpAvatar
             return false;
         }
 
-        private void Trim(int maxItems)
+        private bool Trim(int maxItems)
         {
+            var changed = false;
             var safeMax = Math.Max(1, maxItems);
             while (data.items.Count > safeMax)
             {
                 data.items.RemoveAt(0);
+                changed = true;
             }
+
+            return changed;
         }
 
         private static string NormalizeMemory(string text)

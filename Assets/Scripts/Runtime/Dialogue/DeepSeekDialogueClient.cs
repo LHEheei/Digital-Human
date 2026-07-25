@@ -24,6 +24,16 @@ namespace SrtpAvatar
                 throw new InvalidOperationException("DeepSeek Key 未配置。");
             }
 
+            if (!RuntimeSecrets.TryNormalizeDeepSeekBaseUrl(RuntimeSecrets.ResolveDeepSeekBaseUrl(config), out _, out var warning, out var error))
+            {
+                throw new InvalidOperationException(error);
+            }
+
+            if (!string.IsNullOrWhiteSpace(warning))
+            {
+                Debug.LogWarning(warning);
+            }
+
             var messages = new List<ChatMessage>
             {
                 new ChatMessage { role = "system", content = DialoguePrompt.SystemPrompt }
@@ -58,7 +68,12 @@ namespace SrtpAvatar
 
             var response = JsonUtility.FromJson<ChatCompletionResponse>(request.downloadHandler.text);
             var content = response?.choices != null && response.choices.Length > 0 ? response.choices[0].message.content : "";
-            return DialogueParser.FromPossiblyWrappedJson(content);
+            if (!DialogueParser.TryFromPossiblyWrappedJson(content, out var decision))
+            {
+                throw new InvalidOperationException("DeepSeek 返回的 JSON 格式无效或内容为空。");
+            }
+
+            return decision;
         }
 
         private int ResolveTimeoutSeconds()

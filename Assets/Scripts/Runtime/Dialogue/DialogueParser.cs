@@ -7,20 +7,42 @@ namespace SrtpAvatar
     {
         public static DialogueDecision FromPossiblyWrappedJson(string raw)
         {
+            if (TryFromPossiblyWrappedJson(raw, out var decision))
+            {
+                return decision;
+            }
+
+            return new DialogueDecision { reply = string.IsNullOrWhiteSpace(raw) ? "我理解了。" : raw.Trim() };
+        }
+
+        public static bool TryFromPossiblyWrappedJson(string raw, out DialogueDecision decision)
+        {
+            decision = null;
             if (string.IsNullOrWhiteSpace(raw))
             {
-                return new DialogueDecision();
+                return false;
             }
 
             var json = ExtractJsonObject(raw);
+            if (string.IsNullOrWhiteSpace(json) || json[0] != '{')
+            {
+                return false;
+            }
+
             try
             {
                 var parsed = JsonUtility.FromJson<DialogueDecision>(json);
-                return parsed == null ? new DialogueDecision { reply = raw.Trim() } : parsed.Normalize();
+                if (parsed == null || string.IsNullOrWhiteSpace(parsed.reply))
+                {
+                    return false;
+                }
+
+                decision = parsed.Normalize();
+                return true;
             }
             catch (Exception)
             {
-                return new DialogueDecision { reply = raw.Trim(), emotion = "neutral", gesture = "explain", state = "speaking" };
+                return false;
             }
         }
 

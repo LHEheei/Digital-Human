@@ -31,9 +31,13 @@ public final class NativeSpeechBridge {
         return activity != null && SpeechRecognizer.isRecognitionAvailable(activity);
     }
 
-    public void startRecognition(final String languageTag) {
+    public boolean isTextToSpeechAvailable() {
+        return activity != null && textToSpeech != null && ttsReady;
+    }
+
+    public void startRecognition(final String languageTag, final String sessionId) {
         if (activity == null) {
-            send("OnAndroidSpeechError", "Android Activity 不可用。");
+            send(sessionId, "OnAndroidSpeechError", "Android Activity 不可用。");
             return;
         }
 
@@ -42,7 +46,7 @@ public final class NativeSpeechBridge {
             public void run() {
                 try {
                     if (!SpeechRecognizer.isRecognitionAvailable(activity)) {
-                        send("OnAndroidSpeechError", "当前手机没有可用的系统语音识别服务。");
+                        send(sessionId, "OnAndroidSpeechError", "当前手机没有可用的系统语音识别服务。");
                         return;
                     }
 
@@ -51,7 +55,7 @@ public final class NativeSpeechBridge {
                     }
 
                     speechRecognizer = SpeechRecognizer.createSpeechRecognizer(activity);
-                    speechRecognizer.setRecognitionListener(new UnityRecognitionListener());
+                    speechRecognizer.setRecognitionListener(new UnityRecognitionListener(sessionId));
 
                     Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
@@ -60,7 +64,7 @@ public final class NativeSpeechBridge {
                     intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
                     speechRecognizer.startListening(intent);
                 } catch (Exception ex) {
-                    send("OnAndroidSpeechError", ex.getMessage());
+                    send(sessionId, "OnAndroidSpeechError", ex.getMessage());
                 }
             }
         });
@@ -83,9 +87,9 @@ public final class NativeSpeechBridge {
         });
     }
 
-    public void speak(final String text, final String languageTag) {
+    public void speak(final String text, final String languageTag, final String utteranceId) {
         if (activity == null) {
-            send("OnAndroidTtsError", "Android Activity 不可用。");
+            send(utteranceId, "OnAndroidTtsError", "Android Activity 不可用。");
             return;
         }
 
@@ -98,20 +102,35 @@ public final class NativeSpeechBridge {
                     }
 
                     if (!ttsReady) {
-                        send("OnAndroidTtsError", "系统 TTS 还没有初始化完成，请稍后再试。");
+                        send(utteranceId, "OnAndroidTtsError", "系统 TTS 还没有初始化完成，请稍后再试。");
                         return;
                     }
 
                     Locale locale = localeFromTag(languageTag);
                     textToSpeech.setLanguage(locale);
                     Bundle params = new Bundle();
-                    params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "srtp_tts");
-                    int result = textToSpeech.speak(text == null || text.length() == 0 ? "好的。" : text, TextToSpeech.QUEUE_FLUSH, params, "srtp_tts");
+                    params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
+                    int result = textToSpeech.speak(text == null || text.length() == 0 ? "好的。" : text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
                     if (result == TextToSpeech.ERROR) {
-                        send("OnAndroidTtsError", "系统 TTS 播报启动失败。");
+                        send(utteranceId, "OnAndroidTtsError", "系统 TTS 播报启动失败。");
                     }
                 } catch (Exception ex) {
-                    send("OnAndroidTtsError", ex.getMessage());
+                    send(utteranceId, "OnAndroidTtsError", ex.getMessage());
+                }
+            }
+        });
+    }
+
+    public void stopSpeaking() {
+        if (activity == null) {
+            return;
+        }
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                if (textToSpeech != null) {
+                    textToSpeech.stop();
                 }
             }
         });
@@ -154,17 +173,17 @@ public final class NativeSpeechBridge {
                     textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                         @Override
                         public void onStart(String utteranceId) {
-                            send("OnAndroidTtsStarted", utteranceId);
+                            send(utteranceId, "OnAndroidTtsStarted", "");
                         }
 
                         @Override
                         public void onDone(String utteranceId) {
-                            send("OnAndroidTtsDone", utteranceId);
+                            send(utteranceId, "OnAndroidTtsDone", "");
                         }
 
                         @Override
                         public void onError(String utteranceId) {
-                            send("OnAndroidTtsError", "系统 TTS 播报失败。");
+                            send(utteranceId, "OnAndroidTtsError", "系统 TTS 播报失败。");
                         }
                     });
                 }
@@ -198,11 +217,17 @@ public final class NativeSpeechBridge {
         return new Locale(normalized);
     }
 
-    private void send(String method, String message) {
-        UnityPlayer.UnitySendMessage(unityObjectName, method, message == null ? "" : message);
+    private void send(String callbackId, String method, String message) {
+        UnityPlayer.UnitySendMessage(unityObjectName, method, (callbackId == null ? "" : callbackId) + "\n" + (message == null ? "" : message));
     }
 
     private final class UnityRecognitionListener implements RecognitionListener {
+        private final String sessionId;
+
+        UnityRecognitionListener(String sessionId) {
+            this.sessionId = sessionId;
+        }
+
         @Override
         public void onReadyForSpeech(Bundle params) {
         }
@@ -225,18 +250,18 @@ public final class NativeSpeechBridge {
 
         @Override
         public void onError(int error) {
-            send("OnAndroidSpeechError", errorMessage(error));
+            send(sessionId, "OnAndroidSpeechError", errorMessage(error));
         }
 
         @Override
         public void onResults(Bundle results) {
             ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             if (matches == null || matches.size() == 0) {
-                send("OnAndroidSpeechError", "没有识别到语音内容。");
+                send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");
                 return;
             }
 
-            send("OnAndroidSpeechResult", matches.get(0));
+            send(sessionId, "OnAndroidSpeechResult", matches.get(0));
         }
 
         @Override

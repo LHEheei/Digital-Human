@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using UnityEngine;
 
@@ -8,6 +9,7 @@ namespace SrtpAvatar
         private const string DeepSeekKeyFileName = "deepseek_key.txt";
         private const string DeepSeekSettingsFileName = "deepseek_api_settings.json";
         private const string DeepSeekEditorEnvName = "DEEPSEEK_API_KEY";
+        public const string DefaultDeepSeekBaseUrl = "https://api.deepseek.com";
 
         private static bool settingsLoaded;
         private static DeepSeekApiSettings cachedSettings;
@@ -42,14 +44,21 @@ namespace SrtpAvatar
         public static string ResolveDeepSeekBaseUrl(AppConfig config)
         {
             var settings = LoadDeepSeekSettings();
-            if (!string.IsNullOrWhiteSpace(settings.baseUrl))
+            var candidate = !string.IsNullOrWhiteSpace(settings.baseUrl)
+                ? settings.baseUrl
+                : config == null ? "" : config.deepSeekBaseUrl;
+            if (TryNormalizeDeepSeekBaseUrl(candidate, out var normalized, out var warning, out var error))
             {
-                return settings.baseUrl.Trim();
+                if (!string.IsNullOrWhiteSpace(warning))
+                {
+                    Debug.LogWarning(warning);
+                }
+
+                return normalized;
             }
 
-            return config == null || string.IsNullOrWhiteSpace(config.deepSeekBaseUrl)
-                ? "https://api.deepseek.com"
-                : config.deepSeekBaseUrl.Trim();
+            Debug.LogWarning($"DeepSeek Base URL was rejected: {error}");
+            return DefaultDeepSeekBaseUrl;
         }
 
         public static string ResolveDeepSeekModel(AppConfig config)
@@ -68,6 +77,35 @@ namespace SrtpAvatar
         public static string DeepSeekChatCompletionUrl(AppConfig config)
         {
             return $"{ResolveDeepSeekBaseUrl(config).TrimEnd('/')}/chat/completions";
+        }
+
+        public static bool TryNormalizeDeepSeekBaseUrl(string value, out string normalized, out string warning, out string error)
+        {
+            normalized = DefaultDeepSeekBaseUrl;
+            warning = "";
+            error = "";
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return true;
+            }
+
+            if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)
+                || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrEmpty(uri.UserInfo)
+                || string.IsNullOrWhiteSpace(uri.Host))
+            {
+                error = "Base URL 必须是有效的 HTTPS 地址，且不能包含用户名或密码。";
+                return false;
+            }
+
+            normalized = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
+            if (!string.Equals(uri.Host, "api.deepseek.com", StringComparison.OrdinalIgnoreCase))
+            {
+                warning = "当前 Base URL 不是 DeepSeek 官方域名；保存的 Key 会发送到该 HTTPS 服务。";
+            }
+
+            return true;
         }
 
         public static DeepSeekApiSettings LoadDeepSeekSettings()
@@ -105,9 +143,14 @@ namespace SrtpAvatar
 
         public static void SaveDeepSeekSettings(string baseUrl, string apiKey, string model)
         {
+            if (!TryNormalizeDeepSeekBaseUrl(baseUrl, out var normalizedBaseUrl, out _, out var error))
+            {
+                throw new ArgumentException(error, nameof(baseUrl));
+            }
+
             var settings = new DeepSeekApiSettings
             {
-                baseUrl = string.IsNullOrWhiteSpace(baseUrl) ? "https://api.deepseek.com" : baseUrl.Trim(),
+                baseUrl = normalizedBaseUrl,
                 apiKey = string.IsNullOrWhiteSpace(apiKey) ? "" : apiKey.Trim(),
                 model = string.IsNullOrWhiteSpace(model) ? "deepseek-v4-flash" : model.Trim()
             };
