@@ -37,6 +37,11 @@ namespace SrtpAvatar
                 return false;
             }
 
+            if (memoryText.Length > 256)
+            {
+                return false;
+            }
+
             var lower = memoryText.ToLowerInvariant();
             for (var i = 0; i < SensitiveKeywords.Length; i++)
             {

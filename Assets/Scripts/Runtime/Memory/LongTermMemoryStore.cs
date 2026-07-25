@@ -14,8 +14,15 @@ namespace SrtpAvatar
         private MemoryData data;
 
         public LongTermMemoryStore()
+            : this(Path.Combine(Application.persistentDataPath, FileName))
         {
-            filePath = Path.Combine(Application.persistentDataPath, FileName);
+        }
+
+        public LongTermMemoryStore(string storagePath)
+        {
+            filePath = string.IsNullOrWhiteSpace(storagePath)
+                ? Path.Combine(Application.persistentDataPath, FileName)
+                : storagePath;
             data = Load();
         }
 

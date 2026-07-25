@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -20,8 +21,16 @@ namespace SrtpAvatar
 
         public bool CanUseDeepSeek => config != null && config.HasDeepSeekKey;
 
-        public async Task<DialogueDecision> DecideAsync(string userText)
+        public Task<DialogueDecision> DecideAsync(string userText, CancellationToken cancellationToken = default)
         {
+            return DecideAsync(new TalkInput { text = userText }, cancellationToken);
+        }
+
+        public async Task<DialogueDecision> DecideAsync(TalkInput input, CancellationToken cancellationToken = default)
+        {
+            input = (input ?? new TalkInput()).Normalize();
+            var userText = input.text;
+            cancellationToken.ThrowIfCancellationRequested();
             if (ConversationMemory.IsClearRequest(userText))
             {
                 conversationMemory.Clear();
@@ -36,14 +45,14 @@ namespace SrtpAvatar
             }
 
             var decision = CanUseDeepSeek
-                ? await DecideWithDeepSeekAsync(userText)
+                ? await DecideWithDeepSeekAsync(input, cancellationToken)
                 : LocalDemoDialogue.Decide(userText);
 
             Remember(userText, decision);
             return decision;
         }
 
-        private async Task<DialogueDecision> DecideWithDeepSeekAsync(string userText)
+        private async Task<DialogueDecision> DecideWithDeepSeekAsync(TalkInput input, CancellationToken cancellationToken)
         {
             var recentContext = config.enableConversationMemory
                 ? conversationMemory.BuildContext(config.maxMemoryTurns)
@@ -52,7 +61,7 @@ namespace SrtpAvatar
                 ? longTermMemory.BuildContext(config.maxLongTermMemories)
                 : "";
 
-            return await deepSeekClient.CompleteAsync(userText, recentContext, longTermContext);
+            return await deepSeekClient.CompleteAsync(input, recentContext, longTermContext, cancellationToken);
         }
 
         private void Remember(string userText, DialogueDecision decision)

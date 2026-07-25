@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -16,17 +17,17 @@ namespace SrtpAvatar
             this.config = config;
         }
 
-        public async Task<DialogueDecision> CompleteAsync(string userText, string recentContext, string longTermContext)
+        public async Task<DialogueDecision> CompleteAsync(TalkInput input, string recentContext, string longTermContext, CancellationToken cancellationToken)
         {
             var apiKey = RuntimeSecrets.ResolveDeepSeekApiKey(config);
             if (string.IsNullOrWhiteSpace(apiKey))
             {
-                throw new InvalidOperationException("DeepSeek Key 未配置。");
+                throw new AppException(AppErr.auth, "DeepSeek Key 未配置。");
             }
 
             if (!RuntimeSecrets.TryNormalizeDeepSeekBaseUrl(RuntimeSecrets.ResolveDeepSeekBaseUrl(config), out _, out var warning, out var error))
             {
-                throw new InvalidOperationException(error);
+                throw new AppException(AppErr.config, error);
             }
 
             if (!string.IsNullOrWhiteSpace(warning))
@@ -49,6 +50,13 @@ namespace SrtpAvatar
                 messages.Add(new ChatMessage { role = "system", content = recentContext });
             }
 
+            var emotionContext = input == null ? "" : input.BuildEmotionContext();
+            if (!string.IsNullOrWhiteSpace(emotionContext))
+            {
+                messages.Add(new ChatMessage { role = "system", content = emotionContext });
+            }
+
+            var userText = input == null ? "" : input.text;
             messages.Add(new ChatMessage { role = "user", content = string.IsNullOrWhiteSpace(userText) ? "你好" : userText.Trim() });
 
             var requestBody = new ChatCompletionRequest
@@ -64,13 +72,13 @@ namespace SrtpAvatar
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
             request.SetRequestHeader("Authorization", $"Bearer {apiKey}");
-            await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds());
+            await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds(), AppErr.network, true, cancellationToken);
 
             var response = JsonUtility.FromJson<ChatCompletionResponse>(request.downloadHandler.text);
             var content = response?.choices != null && response.choices.Length > 0 ? response.choices[0].message.content : "";
             if (!DialogueParser.TryFromPossiblyWrappedJson(content, out var decision))
             {
-                throw new InvalidOperationException("DeepSeek 返回的 JSON 格式无效或内容为空。");
+                throw new AppException(AppErr.badJson, "DeepSeek 返回的 JSON 格式无效或内容为空。");
             }
 
             return decision;
