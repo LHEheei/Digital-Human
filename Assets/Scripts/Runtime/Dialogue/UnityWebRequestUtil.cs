@@ -20,6 +20,8 @@ namespace SrtpAvatar
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (request.result != UnityWebRequest.Result.Success)
             {
                 var code = authOnUnauthorized && (request.responseCode == 401 || request.responseCode == 403) ? AppErr.auth : failureCode;

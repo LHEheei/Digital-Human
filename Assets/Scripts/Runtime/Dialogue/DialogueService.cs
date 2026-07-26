@@ -48,6 +48,7 @@ namespace SrtpAvatar
                 ? await DecideWithDeepSeekAsync(input, cancellationToken)
                 : LocalDemoDialogue.Decide(userText);
 
+            cancellationToken.ThrowIfCancellationRequested();
             Remember(userText, decision);
             return decision;
         }

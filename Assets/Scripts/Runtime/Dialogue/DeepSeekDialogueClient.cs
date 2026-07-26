@@ -74,13 +74,16 @@ namespace SrtpAvatar
             request.SetRequestHeader("Authorization", $"Bearer {apiKey}");
             await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds(), AppErr.network, true, cancellationToken);
 
+            cancellationToken.ThrowIfCancellationRequested();
             var response = JsonUtility.FromJson<ChatCompletionResponse>(request.downloadHandler.text);
             var content = response?.choices != null && response.choices.Length > 0 ? response.choices[0].message.content : "";
+            cancellationToken.ThrowIfCancellationRequested();
             if (!DialogueParser.TryFromPossiblyWrappedJson(content, out var decision))
             {
                 throw new AppException(AppErr.badJson, "DeepSeek 返回的 JSON 格式无效或内容为空。");
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             return decision;
         }
 
