@@ -94,6 +94,20 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void LongTermMemoryStore_RefreshesDuplicateBeforeTrimming()
+        {
+            memoryFilePath = Path.Combine(Path.GetTempPath(), "srtp-memory-" + Guid.NewGuid().ToString("N") + ".json");
+            var store = new LongTermMemoryStore(memoryFilePath);
+            Assert.IsTrue(store.Remember("A\nB\nC", 3));
+            Assert.IsTrue(store.Remember("A", 2));
+
+            var context = store.BuildContext(2);
+            StringAssert.Contains("- C", context);
+            StringAssert.Contains("- A", context);
+            StringAssert.DoesNotContain("- B", context);
+        }
+
+        [Test]
         public void UserEmo_NormalizesLabelScoreAndSource()
         {
             var emotion = new UserEmo { label = "fun", score = 4f, source = "" }.Normalize();
@@ -107,14 +121,23 @@ namespace SrtpAvatar.Tests
         public async Task DemoEmoService_ReturnsStableDataAndRecognizableFailures()
         {
             var service = new DemoEmoService();
-            var face = await service.GetFaceAsync(new byte[] { 1 });
-            var emptyVoice = await service.GetVoiceAsync(new byte[0]);
+            var face = await service.GetFaceAsync(new byte[] { 1 }, default);
+            var emptyVoice = await service.GetVoiceAsync(new byte[0], default);
 
             Assert.AreEqual("joy", face.label);
             Assert.AreEqual("face", face.source);
             Assert.IsTrue(face.IsUsable);
             Assert.AreEqual("voice", emptyVoice.source);
             Assert.IsFalse(string.IsNullOrWhiteSpace(emptyVoice.error));
+        }
+
+        [Test]
+        public void UserEmo_IsUsableRequiresPositiveScoreAndValidResult()
+        {
+            Assert.IsFalse(new UserEmo { score = 0f, source = "face" }.IsUsable);
+            Assert.IsTrue(new UserEmo { score = .01f, source = "face" }.IsUsable);
+            Assert.IsFalse(new UserEmo { score = .5f, source = "invalid" }.IsUsable);
+            Assert.IsFalse(new UserEmo { score = .5f, source = "voice", error = "failed" }.IsUsable);
         }
 
         [Test]

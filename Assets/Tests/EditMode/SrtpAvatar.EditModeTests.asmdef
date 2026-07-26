@@ -1,15 +1,19 @@
 {
   "name": "SrtpAvatar.EditModeTests",
   "rootNamespace": "SrtpAvatar.Tests",
-  "references": [],
+  "references": [
+    "UnityEngine.TestRunner",
+    "UnityEditor.TestRunner",
+    "SrtpAvatar.Runtime"
+  ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
-  "overrideReferences": false,
-  "precompiledReferences": [],
+  "overrideReferences": true,
+  "precompiledReferences": ["nunit.framework.dll"],
   "autoReferenced": true,
-  "defineConstraints": [],
+  "defineConstraints": ["UNITY_INCLUDE_TESTS"],
   "versionDefines": [],
   "noEngineReferences": false,
-  "optionalUnityReferences": ["TestAssemblies"]
+  "optionalUnityReferences": []
 }
