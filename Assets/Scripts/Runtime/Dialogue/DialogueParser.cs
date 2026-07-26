@@ -29,6 +29,12 @@ namespace SrtpAvatar
                 return false;
             }
 
+            // JsonUtility applies field initializers when a field is absent, so verify the required reply field first.
+            if (json.IndexOf("\"reply\"", StringComparison.Ordinal) < 0)
+            {
+                return false;
+            }
+
             try
             {
                 var parsed = JsonUtility.FromJson<DialogueDecision>(json);
