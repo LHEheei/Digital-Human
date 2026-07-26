@@ -11,7 +11,7 @@ namespace SrtpAvatar
         public string source = "unknown";
         public string error = "";
 
-        public bool IsUsable => string.IsNullOrWhiteSpace(error) && IsKnownSource(source);
+        public bool IsUsable => string.IsNullOrWhiteSpace(error) && score > 0f && IsKnownSource(source);
 
         public UserEmo Normalize()
         {

@@ -65,7 +65,7 @@ namespace SrtpAvatar
                     continue;
                 }
 
-                if (Contains(text))
+                if (RefreshDuplicate(text))
                 {
                     changed = true;
                     continue;
@@ -135,13 +135,16 @@ namespace SrtpAvatar
             }
         }
 
-        private bool Contains(string text)
+        private bool RefreshDuplicate(string text)
         {
             for (var i = 0; i < data.items.Count; i++)
             {
                 if (string.Equals(data.items[i].text, text, StringComparison.OrdinalIgnoreCase))
                 {
-                    data.items[i].updatedAt = DateTime.UtcNow.ToString("o");
+                    var item = data.items[i];
+                    item.updatedAt = DateTime.UtcNow.ToString("o");
+                    data.items.RemoveAt(i);
+                    data.items.Add(item);
                     return true;
                 }
             }
