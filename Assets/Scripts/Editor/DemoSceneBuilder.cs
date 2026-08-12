@@ -128,7 +128,7 @@ namespace SrtpAvatarEditor
                 bridge = selected.AddComponent<VrmAvatarBridge>();
             }
 
-            var controller = Object.FindFirstObjectByType<DigitalHumanAppController>();
+            var controller = Object.FindAnyObjectByType<DigitalHumanAppController>();
             if (controller == null)
             {
                 Debug.LogError("Digital Human App Controller was not found. Generate the demo scene first.");
@@ -451,7 +451,7 @@ namespace SrtpAvatarEditor
             PlayerSettings.productName = "DesktopAvatarCar";
             PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Android, "com.srtp.desktopavatarcar");
             PlayerSettings.defaultInterfaceOrientation = UIOrientation.Portrait;
-            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel23;
+            PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel25;
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevel34;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);

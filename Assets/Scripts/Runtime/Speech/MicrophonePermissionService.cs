@@ -19,9 +19,9 @@ namespace SrtpAvatar
 
     public sealed class MicrophonePermissionService
     {
+#if UNITY_ANDROID && !UNITY_EDITOR
         public async Task<PermState> RequestAsync(CancellationToken cancellationToken)
         {
-#if UNITY_ANDROID && !UNITY_EDITOR
             if (Permission.HasUserAuthorizedPermission(Permission.Microphone))
             {
                 return PermState.granted;
@@ -30,8 +30,8 @@ namespace SrtpAvatar
             var completion = new TaskCompletionSource<PermState>();
             var callbacks = new PermissionCallbacks();
             callbacks.PermissionGranted += _ => completion.TrySetResult(PermState.granted);
-            callbacks.PermissionDenied += _ => completion.TrySetResult(PermState.denied);
-            callbacks.PermissionDeniedAndDontAskAgain += _ => completion.TrySetResult(PermState.blocked);
+            callbacks.PermissionDenied += permission => completion.TrySetResult(
+                Permission.ShouldShowRequestPermissionRationale(permission) ? PermState.denied : PermState.blocked);
             Permission.RequestUserPermission(Permission.Microphone, callbacks);
             try
             {
@@ -41,9 +41,12 @@ namespace SrtpAvatar
             {
                 return PermState.timeout;
             }
-#else
-            return PermState.granted;
-#endif
         }
+#else
+        public Task<PermState> RequestAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(PermState.granted);
+        }
+#endif
     }
 }

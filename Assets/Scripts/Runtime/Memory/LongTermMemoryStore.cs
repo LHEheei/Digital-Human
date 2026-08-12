@@ -31,7 +31,6 @@ namespace SrtpAvatar
 
         public string BuildContext(int maxItems)
         {
-            Trim(maxItems);
             if (data.items.Count == 0)
             {
                 return "";

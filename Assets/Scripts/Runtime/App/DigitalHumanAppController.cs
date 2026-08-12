@@ -213,41 +213,10 @@ namespace SrtpAvatar
 
         private void EnsureRuntimeComponents()
         {
-            if (androidSpeech == null)
-            {
-                androidSpeech = gameObject.GetComponent<AndroidNativeSpeechBridge>();
-            }
-
-            if (androidSpeech == null)
-            {
-                androidSpeech = gameObject.AddComponent<AndroidNativeSpeechBridge>();
-            }
-
-            if (androidCar == null)
-            {
-                androidCar = gameObject.GetComponent<AndroidBluetoothCarBridge>();
-            }
-
-            if (androidCar == null)
-            {
-                androidCar = gameObject.AddComponent<AndroidBluetoothCarBridge>();
-            }
-
-            if (audioSource == null)
-            {
-                audioSource = gameObject.GetComponent<AudioSource>();
-            }
-
-            if (audioSource == null)
-            {
-                audioSource = gameObject.AddComponent<AudioSource>();
-            }
-
-            avatarSpeechDriver = gameObject.GetComponent<AvatarSpeechDriver>();
-            if (avatarSpeechDriver == null)
-            {
-                avatarSpeechDriver = gameObject.AddComponent<AvatarSpeechDriver>();
-            }
+            androidSpeech = GetOrAddComponent(androidSpeech);
+            androidCar = GetOrAddComponent(androidCar);
+            audioSource = GetOrAddComponent(audioSource);
+            avatarSpeechDriver = GetOrAddComponent(avatarSpeechDriver);
 
             avatarSpeechDriver.Bind(avatarDriver, audioSource);
 
@@ -255,6 +224,11 @@ namespace SrtpAvatar
             {
                 gameObject.AddComponent<ApiConfigPanel>();
             }
+        }
+
+        private T GetOrAddComponent<T>(T component) where T : Component
+        {
+            return component != null ? component : gameObject.GetComponent<T>() ?? gameObject.AddComponent<T>();
         }
 
         private void ShowIdle()

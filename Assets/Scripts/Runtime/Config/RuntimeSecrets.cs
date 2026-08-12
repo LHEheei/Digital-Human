@@ -43,11 +43,7 @@ namespace SrtpAvatar
 
         public static string ResolveDeepSeekBaseUrl(AppConfig config)
         {
-            var settings = LoadDeepSeekSettings();
-            var candidate = !string.IsNullOrWhiteSpace(settings.baseUrl)
-                ? settings.baseUrl
-                : config == null ? "" : config.deepSeekBaseUrl;
-            if (TryNormalizeDeepSeekBaseUrl(candidate, out var normalized, out var warning, out var error))
+            if (TryResolveDeepSeekBaseUrl(config, out var normalized, out var warning, out var error))
             {
                 if (!string.IsNullOrWhiteSpace(warning))
                 {
@@ -59,6 +55,15 @@ namespace SrtpAvatar
 
             Debug.LogWarning($"DeepSeek Base URL was rejected: {error}");
             return DefaultDeepSeekBaseUrl;
+        }
+
+        public static bool TryResolveDeepSeekBaseUrl(AppConfig config, out string normalized, out string warning, out string error)
+        {
+            var settings = LoadDeepSeekSettings();
+            var candidate = !string.IsNullOrWhiteSpace(settings.baseUrl)
+                ? settings.baseUrl
+                : config == null ? "" : config.deepSeekBaseUrl;
+            return TryNormalizeDeepSeekBaseUrl(candidate, out normalized, out warning, out error);
         }
 
         public static string ResolveDeepSeekModel(AppConfig config)
@@ -76,7 +81,12 @@ namespace SrtpAvatar
 
         public static string DeepSeekChatCompletionUrl(AppConfig config)
         {
-            return $"{ResolveDeepSeekBaseUrl(config).TrimEnd('/')}/chat/completions";
+            return DeepSeekChatCompletionUrl(ResolveDeepSeekBaseUrl(config));
+        }
+
+        public static string DeepSeekChatCompletionUrl(string normalizedBaseUrl)
+        {
+            return $"{normalizedBaseUrl.TrimEnd('/')}/chat/completions";
         }
 
         public static bool TryNormalizeDeepSeekBaseUrl(string value, out string normalized, out string warning, out string error)

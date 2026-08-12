@@ -23,7 +23,7 @@ namespace SrtpAvatar
         {
             LoadConfigIfNeeded();
             EnsureEventSystem();
-            canvas = Object.FindFirstObjectByType<Canvas>();
+            canvas = Object.FindAnyObjectByType<Canvas>();
             if (canvas == null)
             {
                 return;
@@ -266,7 +266,7 @@ namespace SrtpAvatar
 
         private static void EnsureEventSystem()
         {
-            if (Object.FindFirstObjectByType<EventSystem>() != null)
+            if (Object.FindAnyObjectByType<EventSystem>() != null)
             {
                 return;
             }

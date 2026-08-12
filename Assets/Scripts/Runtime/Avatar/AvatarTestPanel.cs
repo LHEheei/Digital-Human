@@ -54,12 +54,12 @@ namespace SrtpAvatar
         {
             if (targetCanvas == null)
             {
-                targetCanvas = Object.FindFirstObjectByType<Canvas>();
+                targetCanvas = Object.FindAnyObjectByType<Canvas>();
             }
 
             if (audioSource == null)
             {
-                var controller = Object.FindFirstObjectByType<DigitalHumanAppController>();
+                var controller = Object.FindAnyObjectByType<DigitalHumanAppController>();
                 if (controller != null)
                 {
                     audioSource = controller.GetComponent<AudioSource>();
@@ -68,7 +68,7 @@ namespace SrtpAvatar
 
             if (avatarDriver == null)
             {
-                avatarDriver = Object.FindFirstObjectByType<VrmAvatarBridge>();
+                avatarDriver = Object.FindAnyObjectByType<VrmAvatarBridge>();
             }
         }
 

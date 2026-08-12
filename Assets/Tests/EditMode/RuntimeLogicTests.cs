@@ -108,6 +108,36 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void LongTermMemoryStore_BuildContextDoesNotDiscardStoredItems()
+        {
+            memoryFilePath = Path.Combine(Path.GetTempPath(), "srtp-memory-" + Guid.NewGuid().ToString("N") + ".json");
+            var store = new LongTermMemoryStore(memoryFilePath);
+            Assert.IsTrue(store.Remember("A\nB\nC", 3));
+
+            var context = store.BuildContext(1);
+
+            Assert.AreEqual(3, store.Count);
+            StringAssert.Contains("- C", context);
+            StringAssert.DoesNotContain("- A", context);
+        }
+
+        [Test]
+        public void ConversationMemory_BuildContextDoesNotDiscardStoredTurns()
+        {
+            var memory = new ConversationMemory();
+            var decision = new DialogueDecision { reply = "reply" };
+            memory.Add("first", decision, 3);
+            memory.Add("second", decision, 3);
+            memory.Add("third", decision, 3);
+
+            var context = memory.BuildContext(1);
+
+            Assert.AreEqual(3, memory.Count);
+            StringAssert.Contains("third", context);
+            StringAssert.DoesNotContain("first", context);
+        }
+
+        [Test]
         public void UserEmo_NormalizesLabelScoreAndSource()
         {
             var emotion = new UserEmo { label = "fun", score = 4f, source = "" }.Normalize();

@@ -25,7 +25,7 @@ namespace SrtpAvatar
                 throw new AppException(AppErr.auth, "DeepSeek Key 未配置。");
             }
 
-            if (!RuntimeSecrets.TryNormalizeDeepSeekBaseUrl(RuntimeSecrets.ResolveDeepSeekBaseUrl(config), out _, out var warning, out var error))
+            if (!RuntimeSecrets.TryResolveDeepSeekBaseUrl(config, out var baseUrl, out var warning, out var error))
             {
                 throw new AppException(AppErr.config, error);
             }
@@ -67,7 +67,7 @@ namespace SrtpAvatar
                 messages = messages.ToArray()
             };
 
-            using var request = new UnityWebRequest(RuntimeSecrets.DeepSeekChatCompletionUrl(config), UnityWebRequest.kHttpVerbPOST);
+            using var request = new UnityWebRequest(RuntimeSecrets.DeepSeekChatCompletionUrl(baseUrl), UnityWebRequest.kHttpVerbPOST);
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(requestBody)));
             request.downloadHandler = new DownloadHandlerBuffer();
             request.SetRequestHeader("Content-Type", "application/json");
@@ -76,7 +76,7 @@ namespace SrtpAvatar
 
             cancellationToken.ThrowIfCancellationRequested();
             var response = JsonUtility.FromJson<ChatCompletionResponse>(request.downloadHandler.text);
-            var content = response?.choices != null && response.choices.Length > 0 ? response.choices[0].message.content : "";
+            var content = ExtractFirstResponseContent(response);
             cancellationToken.ThrowIfCancellationRequested();
             if (!DialogueParser.TryFromPossiblyWrappedJson(content, out var decision))
             {
@@ -90,6 +90,17 @@ namespace SrtpAvatar
         private int ResolveTimeoutSeconds()
         {
             return config == null ? 25 : Mathf.Clamp(config.deepSeekRequestTimeoutSeconds, 5, 60);
+        }
+
+        private static string ExtractFirstResponseContent(ChatCompletionResponse response)
+        {
+            if (response?.choices == null || response.choices.Length == 0)
+            {
+                return "";
+            }
+
+            var firstChoice = response.choices[0];
+            return firstChoice?.message?.content ?? "";
         }
 
         [Serializable]

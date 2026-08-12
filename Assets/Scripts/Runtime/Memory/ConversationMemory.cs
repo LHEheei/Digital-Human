@@ -47,7 +47,6 @@ namespace SrtpAvatar
 
         public string BuildContext(int maxTurns)
         {
-            Trim(maxTurns);
             if (turns.Count == 0)
             {
                 return "";
@@ -55,10 +54,11 @@ namespace SrtpAvatar
 
             var builder = new StringBuilder();
             builder.AppendLine("以下是本轮对话的最近历史，用于理解上下文，不要逐字复述：");
-            for (var i = 0; i < turns.Count; i++)
+            var start = Math.Max(0, turns.Count - Math.Max(1, maxTurns));
+            for (var i = start; i < turns.Count; i++)
             {
                 var turn = turns[i];
-                builder.Append(i + 1).Append(". 用户：").AppendLine(turn.userText);
+                builder.Append(i - start + 1).Append(". 用户：").AppendLine(turn.userText);
                 builder.Append("   数字人：").AppendLine(turn.reply);
             }
 
