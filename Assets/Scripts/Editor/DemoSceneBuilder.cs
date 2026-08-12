@@ -59,7 +59,25 @@ namespace SrtpAvatarEditor
         [MenuItem("SRTP/Build Android APK")]
         public static void BuildAndroidApk()
         {
-            Directory.CreateDirectory("Builds");
+            BuildAndroidApk("Builds/DesktopAvatarCar.apk", BuildOptions.None);
+        }
+
+        [MenuItem("SRTP/Build Android Development APK (Validation)")]
+        public static void BuildAndroidDevelopmentApk()
+        {
+            BuildAndroidApk(
+                "Builds/Validation/DesktopAvatarCar-development.apk",
+                BuildOptions.Development | BuildOptions.AllowDebugging);
+        }
+
+        private static void BuildAndroidApk(string outputPath, BuildOptions buildOptions)
+        {
+            var outputDirectory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
             ConfigureAndroidPlayerSettings();
 
             var scene = SceneManager.GetActiveScene();
@@ -80,13 +98,13 @@ namespace SrtpAvatarEditor
             var options = new BuildPlayerOptions
             {
                 scenes = new[] { scenePath },
-                locationPathName = "Builds/DesktopAvatarCar.apk",
+                locationPathName = outputPath,
                 target = BuildTarget.Android,
-                options = BuildOptions.None
+                options = buildOptions
             };
 
             var report = BuildPipeline.BuildPlayer(options);
-            Debug.Log($"Android build finished: {report.summary.result}, {report.summary.totalSize} bytes");
+            Debug.Log($"Android build finished: {report.summary.result}, {report.summary.totalSize} bytes, {outputPath}");
         }
 
         [MenuItem("SRTP/Use Selected VRM Avatar")]
