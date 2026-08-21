@@ -1,0 +1,28 @@
+pluginManagement {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        **ARTIFACTORYREPOSITORY**
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+
+include ':launcher'
+include ':unityLibrary'
+**INCLUDES**
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
+    repositories {
+        // The Google Maven endpoint may be slow or unavailable on some mainland networks.
+        // This mirror is only used while building; it is not contacted by the installed app.
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        **ARTIFACTORYREPOSITORY**
+        google()
+        mavenCentral()
+        flatDir {
+            dirs "${project(':unityLibrary').projectDir}/libs"
+        }
+    }
+}

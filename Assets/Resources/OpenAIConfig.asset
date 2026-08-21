@@ -23,8 +23,18 @@ MonoBehaviour:
   preferAndroidNativeSpeech: 1
   speechLanguage: zh-CN
   speechRecognitionTimeoutSeconds: 20
+  enableAutoConversation: 1
+  autoConversationRetryDelaySeconds: 1.2
   ttsBaseTimeoutSeconds: 5
   ttsSecondsPerCharacter: 0.25
+  enableEmotionPerception: 1
+  emotionRuntimeMode: 1
+  emotionServiceBaseUrl: http://192.168.1.6:8000
+  emotionRequestTimeoutSeconds: 10
+  emotionCameraSampleIntervalSeconds: 1
+  emotionVoiceWindowSeconds: 4
+  preferFrontEmotionCamera: 1
+  showEmotionCameraPreview: 1
   enableCarCommunication: 0
   carCommunicationMode: 1
   carHttpEndpoint:

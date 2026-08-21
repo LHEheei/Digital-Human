@@ -62,6 +62,11 @@ public final class NativeSpeechBridge {
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, normalizeLanguage(languageTag));
                     intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
                     intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+                    // These are advisory values, but on supported recognizers they make a
+                    // spoken turn finish promptly without requiring the user to tap again.
+                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500);
+                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900);
+                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1100);
                     speechRecognizer.startListening(intent);
                 } catch (Exception ex) {
                     send(sessionId, "OnAndroidSpeechError", ex.getMessage());

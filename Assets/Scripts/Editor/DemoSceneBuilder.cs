@@ -70,6 +70,43 @@ namespace SrtpAvatarEditor
                 BuildOptions.Development | BuildOptions.AllowDebugging);
         }
 
+        [MenuItem("SRTP/Build Android Standalone APK (On-device Face)")]
+        public static void BuildAndroidStandaloneApk()
+        {
+            var config = AssetDatabase.LoadAssetAtPath<AppConfig>(ConfigPath);
+            if (config == null)
+            {
+                Debug.LogError("OpenAIConfig.asset was not found. Generate the demo scene first.");
+                return;
+            }
+
+            var original = new StandaloneEmotionSettings(config);
+            try
+            {
+                config.enableEmotionPerception = true;
+                config.emotionRuntimeMode = EmotionRuntimeMode.AndroidOnDeviceFace;
+                EditorUtility.SetDirty(config);
+                AssetDatabase.SaveAssets();
+                BuildAndroidApk("Builds/Distribution/DesktopAvatarCar-standalone.apk", BuildOptions.None);
+            }
+            finally
+            {
+                // BuildPipeline can unload ScriptableObject instances during a batch build.
+                // Reload the asset instead of touching the possibly destroyed reference.
+                var restoredConfig = AssetDatabase.LoadAssetAtPath<AppConfig>(ConfigPath);
+                if (restoredConfig == null)
+                {
+                    Debug.LogError("OpenAIConfig.asset could not be reloaded after standalone build.");
+                }
+                else
+                {
+                    original.Restore(restoredConfig);
+                    EditorUtility.SetDirty(restoredConfig);
+                    AssetDatabase.SaveAssets();
+                }
+            }
+        }
+
         private static void BuildAndroidApk(string outputPath, BuildOptions buildOptions)
         {
             var outputDirectory = Path.GetDirectoryName(outputPath);
@@ -454,7 +491,29 @@ namespace SrtpAvatarEditor
             PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel25;
             PlayerSettings.Android.targetSdkVersion = AndroidSdkVersions.AndroidApiLevel34;
             PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
+            // The local EmotionService is intentionally served over LAN HTTP during
+            // development. Keep this scoped to development builds; release builds
+            // must use HTTPS and therefore remain blocked from cleartext requests.
+            PlayerSettings.insecureHttpOption = InsecureHttpOption.DevelopmentOnly;
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.Android, BuildTarget.Android);
+        }
+
+        private sealed class StandaloneEmotionSettings
+        {
+            private readonly bool enabled;
+            private readonly EmotionRuntimeMode runtimeMode;
+
+            public StandaloneEmotionSettings(AppConfig config)
+            {
+                enabled = config.enableEmotionPerception;
+                runtimeMode = config.emotionRuntimeMode;
+            }
+
+            public void Restore(AppConfig config)
+            {
+                config.enableEmotionPerception = enabled;
+                config.emotionRuntimeMode = runtimeMode;
+            }
         }
 
         private static Material Material(string name, Color color)

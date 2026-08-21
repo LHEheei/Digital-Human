@@ -25,12 +25,18 @@ namespace SrtpAvatar
         private DialogueService dialogueService;
         private CarCommunicationService carCommunicationService;
         private AvatarSpeechDriver avatarSpeechDriver;
+        private EmotionPerceptionController emotionPerception;
+        private EmotionStatusPanel emotionStatusPanel;
         private AppUi ui;
         private CancellationTokenSource conversationCancellation;
+        private CancellationTokenSource autoListeningCancellation;
         private bool busy;
+        private bool autoListening;
         private bool isDestroyed;
+        private int autoListeningGeneration;
 
         private bool CanUseDeepSeek => config != null && config.HasDeepSeekKey;
+        private bool CanAutoListen => config != null && config.enableAutoConversation && speechService != null && speechService.CanRecognize;
 
         private void Awake()
         {
@@ -50,21 +56,16 @@ namespace SrtpAvatar
             }
 
             ShowIdle();
+            ScheduleAutoListening();
         }
 
         public async Task RunConversationAsync()
         {
-            if (busy || isDestroyed)
+            StopAutoListening();
+            if (!TryBeginConversation(out var cancellationToken))
             {
                 return;
             }
-
-            busy = true;
-            SetButtonInteractable(false);
-            conversationCancellation?.Cancel();
-            conversationCancellation?.Dispose();
-            conversationCancellation = new CancellationTokenSource();
-            var cancellationToken = conversationCancellation.Token;
 
             try
             {
@@ -72,18 +73,19 @@ namespace SrtpAvatar
                 SetState(AvatarState.listening, "倾听");
                 SetSubtitle("请说话...");
 
-                var userText = await speechService.ListenForUserTextAsync(SetSubtitle, cancellationToken);
+                emotionPerception?.SuspendAudioCapture();
+                string userText;
+                try
+                {
+                    userText = await speechService.ListenForUserTextAsync(SetSubtitle, cancellationToken);
+                }
+                finally
+                {
+                    emotionPerception?.ResumeAudioCapture();
+                }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                SetState(AvatarState.thinking, "思考");
-                SetSubtitle("正在理解你的语音...");
-
-                var decision = await dialogueService.DecideAsync(new TalkInput { text = userText }, cancellationToken);
-                var finalHint = await PresentReplyAsync(decision, cancellationToken);
-
-                cancellationToken.ThrowIfCancellationRequested();
-                SetState(AvatarState.idle, "空闲");
-                SetHint(string.IsNullOrWhiteSpace(finalHint) ? ResolveStartupHint() : finalHint);
+                await RespondToUserTextAsync(userText, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -101,18 +103,183 @@ namespace SrtpAvatar
             }
             finally
             {
-                if (!isDestroyed)
+                FinishConversation(cancellationToken);
+                ScheduleAutoListening();
+            }
+        }
+
+        private void ScheduleAutoListening()
+        {
+            if (!CanAutoListen || busy || autoListening || isDestroyed)
+            {
+                return;
+            }
+
+            _ = RunAutomaticListeningAsync(autoListeningGeneration);
+        }
+
+        private async Task RunAutomaticListeningAsync(int generation)
+        {
+            if (!CanAutoListen || busy || autoListening || generation != autoListeningGeneration || isDestroyed)
+            {
+                return;
+            }
+
+            autoListening = true;
+            var cancellation = new CancellationTokenSource();
+            autoListeningCancellation = cancellation;
+            try
+            {
+                SetState(AvatarState.listening, "倾听");
+                SetSubtitle("正在聆听，直接说话即可开始对话");
+                SetHint("自动语音交互已开启；MIC 可用于手动重试。");
+
+                emotionPerception?.SuspendAudioCapture();
+                string userText;
+                try
                 {
-                    SetButtonInteractable(true);
+                    userText = await speechService.ListenForUserTextAsync(SetSubtitle, cancellation.Token);
+                }
+                finally
+                {
+                    emotionPerception?.ResumeAudioCapture();
                 }
 
-                busy = false;
-                if (conversationCancellation != null && conversationCancellation.Token == cancellationToken)
+                if (cancellation.IsCancellationRequested || generation != autoListeningGeneration || !AutoConversationPolicy.HasUsableText(userText))
                 {
-                    conversationCancellation.Dispose();
-                    conversationCancellation = null;
+                    return;
+                }
+
+                await RunConversationFromCapturedTextAsync(userText);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                if (generation == autoListeningGeneration && !AutoConversationPolicy.ShouldQuietlyRetry(ex))
+                {
+                    Debug.LogWarning("Automatic speech recognition failed: " + ex.Message);
+                    SetState(AvatarState.idle, "空闲");
+                    SetSubtitle("自动语音识别暂不可用，正在重试...");
+                    SetHint("可点击 MIC 手动重试；请检查系统语音识别和网络。");
                 }
             }
+            finally
+            {
+                if (ReferenceEquals(autoListeningCancellation, cancellation))
+                {
+                    autoListeningCancellation = null;
+                }
+
+                autoListening = false;
+                var shouldRestart = generation == autoListeningGeneration && CanAutoListen && !busy && !isDestroyed;
+                if (shouldRestart)
+                {
+                    try
+                    {
+                        var delay = AutoConversationPolicy.NormalizeRetryDelay(config.autoConversationRetryDelaySeconds);
+                        await Task.Delay(TimeSpan.FromSeconds(delay), cancellation.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+
+                    if (generation == autoListeningGeneration && CanAutoListen && !busy && !isDestroyed)
+                    {
+                        ScheduleAutoListening();
+                    }
+                }
+
+                cancellation.Dispose();
+            }
+        }
+
+        private async Task RunConversationFromCapturedTextAsync(string userText)
+        {
+            if (!AutoConversationPolicy.HasUsableText(userText) || !TryBeginConversation(out var cancellationToken))
+            {
+                return;
+            }
+
+            try
+            {
+                await RespondToUserTextAsync(userText.Trim(), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.Log("Conversation canceled.");
+            }
+            catch (AppException ex)
+            {
+                Debug.LogException(ex);
+                ShowRecoverableError(ex.Error);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+                ShowRecoverableError(AppErr.unknown);
+            }
+            finally
+            {
+                FinishConversation(cancellationToken);
+            }
+        }
+
+        private bool TryBeginConversation(out CancellationToken cancellationToken)
+        {
+            cancellationToken = default;
+            if (busy || isDestroyed)
+            {
+                return false;
+            }
+
+            busy = true;
+            SetButtonInteractable(false);
+            conversationCancellation?.Cancel();
+            conversationCancellation?.Dispose();
+            conversationCancellation = new CancellationTokenSource();
+            cancellationToken = conversationCancellation.Token;
+            return true;
+        }
+
+        private async Task RespondToUserTextAsync(string userText, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetState(AvatarState.thinking, "思考");
+            SetSubtitle("正在理解你的语音...");
+
+            var input = new TalkInput { text = userText };
+            input = emotionPerception == null ? input : emotionPerception.ApplyLatest(input);
+            var decision = await dialogueService.DecideAsync(input, cancellationToken);
+            var finalHint = await PresentReplyAsync(decision, cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            SetState(AvatarState.idle, "空闲");
+            SetHint(string.IsNullOrWhiteSpace(finalHint) ? ResolveStartupHint() : finalHint);
+        }
+
+        private void FinishConversation(CancellationToken cancellationToken)
+        {
+            if (!isDestroyed)
+            {
+                SetButtonInteractable(true);
+            }
+
+            busy = false;
+            if (conversationCancellation != null && conversationCancellation.Token == cancellationToken)
+            {
+                conversationCancellation.Dispose();
+                conversationCancellation = null;
+            }
+        }
+
+        private void StopAutoListening()
+        {
+            autoListeningGeneration++;
+            autoListeningCancellation?.Cancel();
+            autoListeningCancellation = null;
+            speechService?.Input.Cancel();
         }
 
         private async Task<string> PresentReplyAsync(DialogueDecision decision, CancellationToken cancellationToken)
@@ -217,8 +384,12 @@ namespace SrtpAvatar
             androidCar = GetOrAddComponent(androidCar);
             audioSource = GetOrAddComponent(audioSource);
             avatarSpeechDriver = GetOrAddComponent(avatarSpeechDriver);
+            emotionPerception = GetOrAddComponent(emotionPerception);
+            emotionStatusPanel = GetOrAddComponent(emotionStatusPanel);
 
             avatarSpeechDriver.Bind(avatarDriver, audioSource);
+            emotionPerception.Initialize(config);
+            emotionStatusPanel.Initialize(emotionPerception);
 
             if (gameObject.GetComponent<ApiConfigPanel>() == null)
             {
@@ -234,7 +405,7 @@ namespace SrtpAvatar
         private void ShowIdle()
         {
             SetState(AvatarState.idle, "空闲");
-            SetSubtitle("点击麦克风开始对话");
+            SetSubtitle(CanAutoListen ? "直接说话即可开始对话" : "点击麦克风开始对话");
             SetHint(ResolveStartupHint());
         }
 
@@ -251,10 +422,11 @@ namespace SrtpAvatar
         {
             var input = speechService.CanRecognize ? "输入：Android ASR" : "输入：本地模拟";
             var output = speechService.CanSpeak ? "输出：Android TTS" : "输出：本地提示音";
+            var interaction = CanAutoListen ? "交互：自动聆听" : "交互：点击 MIC";
             var dialogue = CanUseDeepSeek ? "对话：DeepSeek" : "对话：本地演示";
             var memory = config != null && config.enableLongTermMemory ? "记忆：启用" : "记忆：关闭";
             var car = config != null && config.enableCarCommunication && config.carCommunicationMode != CarCommunicationMode.Disabled ? "小车：启用" : "小车：关闭";
-            return $"{input} · {output}\n{dialogue} · {memory} · {car}";
+            return $"{input} · {output} · {interaction}\n{dialogue} · {memory} · {car}";
         }
 
         private void SetState(AvatarState state, string label)
@@ -282,6 +454,7 @@ namespace SrtpAvatar
         private void OnDestroy()
         {
             isDestroyed = true;
+            StopAutoListening();
             conversationCancellation?.Cancel();
             conversationCancellation?.Dispose();
             conversationCancellation = null;

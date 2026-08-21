@@ -148,6 +148,38 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void UserEmo_NormalizesOnlySupportedClassifierScores()
+        {
+            var emotion = new UserEmo
+            {
+                scores = new[]
+                {
+                    new EmotionScore { label = "joy", score = 2f },
+                    new EmotionScore { label = "fear", score = .8f },
+                    new EmotionScore { label = "joy", score = .6f },
+                    new EmotionScore { label = "neutral", score = -.2f }
+                }
+            }.Normalize();
+
+            Assert.AreEqual(2, emotion.scores.Length);
+            Assert.AreEqual("joy", emotion.scores[0].label);
+            Assert.AreEqual(1f, emotion.scores[0].score);
+            Assert.AreEqual("neutral", emotion.scores[1].label);
+            Assert.AreEqual(0f, emotion.scores[1].score);
+        }
+
+        [Test]
+        public void HttpEmoService_ParsesFaceClassifierDistribution()
+        {
+            const string json = "{\"label\":\"joy\",\"score\":0.8,\"source\":\"face\",\"scores\":[{\"label\":\"joy\",\"score\":0.7},{\"label\":\"fear\",\"score\":0.2}]}";
+
+            Assert.IsTrue(HttpEmoService.TryParseResult(json, "face", out var result));
+            Assert.AreEqual(1, result.scores.Length);
+            Assert.AreEqual("joy", result.scores[0].label);
+            Assert.AreEqual(.7f, result.scores[0].score);
+        }
+
+        [Test]
         public async Task DemoEmoService_ReturnsStableDataAndRecognizableFailures()
         {
             var service = new DemoEmoService();
@@ -171,6 +203,14 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void HttpEmoService_ExtractsSafeValidationErrorDetail()
+        {
+            Assert.IsTrue(HttpEmoService.TryParseErrorDetail("{\"detail\":\"No clear speech detected.\"}", out var detail));
+            Assert.AreEqual("No clear speech detected.", detail);
+            Assert.IsFalse(HttpEmoService.TryParseErrorDetail("{broken", out _));
+        }
+
+        [Test]
         public void TalkInput_OnlyAddsValidEmotionContext()
         {
             var input = new TalkInput
@@ -182,6 +222,137 @@ namespace SrtpAvatar.Tests
             var context = input.BuildEmotionContext();
             StringAssert.Contains("joy", context);
             StringAssert.DoesNotContain("empty audio", context);
+        }
+
+        [Test]
+        public void UserEmo_FreshnessRejectsExpiredResult()
+        {
+            var emotion = new UserEmo { label = "joy", score = .8f, source = "face", capturedAtUnixMs = 1000 };
+            Assert.IsTrue(emotion.IsFresh(3000, 2000));
+            Assert.IsFalse(emotion.IsFresh(3001, 2000));
+            Assert.IsNull(EmotionSamplingPolicy.FreshOrNull(emotion, 3001, 2000));
+            Assert.AreSame(emotion, EmotionSamplingPolicy.FreshOrNull(emotion, 3000, 2000));
+        }
+
+        [Test]
+        public void EmotionResponsePolicy_AppliesOnlyConfidentFusionResult()
+        {
+            var decision = new DialogueDecision { emotion = "neutral", gesture = "none" };
+            var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .7f, source = "fusion" });
+            Assert.AreEqual("sorrow", applied.emotion);
+            Assert.AreEqual("nod", applied.gesture);
+            StringAssert.Contains("放慢", applied.reply);
+
+            var lowConfidence = EmotionResponsePolicy.Apply(new DialogueDecision { emotion = "joy" }, new UserEmo { label = "angry", score = .4f, source = "fusion" });
+            Assert.AreEqual("joy", lowConfidence.emotion);
+        }
+
+        [Test]
+        public void EmotionResponsePolicy_RemovesEmotionDisclosureFromReply()
+        {
+            var decision = new DialogueDecision { reply = "感觉你挺平静的，心情不错的样子。", gesture = "none" };
+            var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "neutral", score = .9f, source = "fusion" });
+
+            Assert.AreEqual("你好呀，有什么想聊或需要一起处理的吗？", applied.reply);
+            StringAssert.DoesNotContain("感觉你", applied.reply);
+        }
+
+        [Test]
+        public void Pcm16Wav_ExtractsCircularAudioAndWritesWaveHeader()
+        {
+            var samples = new[] { 0f, .1f, .2f, .3f, .4f, .5f };
+            var extracted = Pcm16Wav.ExtractLatestMono(samples, 1, 2, 4);
+            CollectionAssert.AreEqual(new[] { .4f, .5f, 0f, .1f }, extracted);
+
+            var wav = Pcm16Wav.EncodeMono(extracted, 16000);
+            Assert.AreEqual(52, wav.Length);
+            Assert.AreEqual((byte)'R', wav[0]);
+            Assert.AreEqual((byte)'W', wav[8]);
+        }
+
+        [Test]
+        public void CameraFrameTransform_RotatesPortraitCameraFramesUpright()
+        {
+            var source = new[]
+            {
+                new Color32(1, 0, 0, 255), new Color32(2, 0, 0, 255),
+                new Color32(3, 0, 0, 255), new Color32(4, 0, 0, 255),
+                new Color32(5, 0, 0, 255), new Color32(6, 0, 0, 255)
+            };
+
+            var rotated = CameraFrameTransform.OrientAndScale(source, 2, 3, 90, false, 10, out var width, out var height);
+
+            Assert.AreEqual(3, width);
+            Assert.AreEqual(2, height);
+            CollectionAssert.AreEqual(new byte[] { 5, 3, 1, 6, 4, 2 }, System.Array.ConvertAll(rotated, pixel => pixel.r));
+        }
+
+        [Test]
+        public void CameraFrameTransform_AppliesVerticalMirrorBeforeEncoding()
+        {
+            var source = new[]
+            {
+                new Color32(1, 0, 0, 255), new Color32(2, 0, 0, 255),
+                new Color32(3, 0, 0, 255), new Color32(4, 0, 0, 255)
+            };
+
+            var mirrored = CameraFrameTransform.OrientAndScale(source, 2, 2, 0, true, 10, out _, out _);
+
+            CollectionAssert.AreEqual(new byte[] { 3, 4, 1, 2 }, System.Array.ConvertAll(mirrored, pixel => pixel.r));
+        }
+
+        [Test]
+        public void CameraPreviewTransform_AppliesDeviceOrientationWithoutChangingCaptureData()
+        {
+            Assert.AreEqual(-90f, CameraPreviewTransform.GetZRotation(90));
+            Assert.AreEqual(new Vector2(135f, 180f), CameraPreviewTransform.GetDisplayBounds(new Vector2(180f, 135f), 90));
+
+            var mirroredUv = CameraPreviewTransform.GetUvRect(true);
+            Assert.AreEqual(1f, mirroredUv.y);
+            Assert.AreEqual(-1f, mirroredUv.height);
+        }
+
+        [Test]
+        public void EmotionSamplingPolicy_UsesClampedIntervals()
+        {
+            Assert.IsFalse(EmotionSamplingPolicy.IsDue(0.05f, 0f, 0f));
+            Assert.IsTrue(EmotionSamplingPolicy.IsDue(0.1f, 0f, 0f));
+        }
+
+        [Test]
+        public void EmotionSamplingPolicy_OnlyTreatsRecentShortFaceLossAsTransient()
+        {
+            var face = new UserEmo { label = "joy", score = .8f, source = "face", capturedAtUnixMs = 1000 };
+
+            Assert.IsTrue(EmotionSamplingPolicy.IsTransientFaceLoss(face, 1, 3000));
+            Assert.IsFalse(EmotionSamplingPolicy.IsTransientFaceLoss(face, EmotionSamplingPolicy.ConsecutiveFaceMissesBeforeUnavailable, 3000));
+            Assert.IsFalse(EmotionSamplingPolicy.IsTransientFaceLoss(face, 1, 4001));
+        }
+
+        [Test]
+        public void LocalEmotionFusion_UsesRecentOnDeviceFaceResultWithoutServer()
+        {
+            var now = 10000L;
+            var fusion = LocalEmotionFusion.Fuse(
+                new UserEmo { label = "joy", score = .82f, source = "face", capturedAtUnixMs = now },
+                null,
+                now);
+
+            Assert.AreEqual("joy", fusion.label);
+            Assert.AreEqual("fusion", fusion.source);
+            Assert.AreEqual(.82f, fusion.score);
+        }
+
+        [Test]
+        public void LocalEmotionFusion_FallsBackToLowConfidenceNeutralForExpiredInputs()
+        {
+            var fusion = LocalEmotionFusion.Fuse(
+                new UserEmo { label = "angry", score = .9f, source = "face", capturedAtUnixMs = 1 },
+                null,
+                10000);
+
+            Assert.AreEqual("neutral", fusion.label);
+            Assert.AreEqual(.45f, fusion.score);
         }
 
         [Test]
@@ -216,6 +387,18 @@ namespace SrtpAvatar.Tests
             Assert.IsFalse(AndroidNativeSpeechBridge.TryReadCallback("old\nhello", "current", out _));
             Assert.IsFalse(AndroidNativeSpeechBridge.TryReadCallback("current", "current", out _));
             Assert.IsFalse(AndroidNativeSpeechBridge.TryReadCallback("", "current", out _));
+        }
+
+        [Test]
+        public void AutoConversationPolicy_TreatsSilenceAsNormalAndKeepsOtherErrorsVisible()
+        {
+            Assert.IsTrue(AutoConversationPolicy.HasUsableText("你好"));
+            Assert.IsFalse(AutoConversationPolicy.HasUsableText("  "));
+            Assert.IsTrue(AutoConversationPolicy.ShouldQuietlyRetry("没有听到说话。"));
+            Assert.IsTrue(AutoConversationPolicy.ShouldQuietlyRetry(new AppException(AppErr.speech, "识别失败", new InvalidOperationException("没有识别到语音内容。"))));
+            Assert.IsFalse(AutoConversationPolicy.ShouldQuietlyRetry("系统语音识别网络失败。"));
+            Assert.AreEqual(1.2f, AutoConversationPolicy.NormalizeRetryDelay(0f));
+            Assert.AreEqual(.25f, AutoConversationPolicy.NormalizeRetryDelay(.1f));
         }
     }
 }

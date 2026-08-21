@@ -49,6 +49,7 @@ namespace SrtpAvatar
                 : LocalDemoDialogue.Decide(userText);
 
             cancellationToken.ThrowIfCancellationRequested();
+            decision = EmotionResponsePolicy.Apply(decision, input.fusionEmo);
             Remember(userText, decision);
             return decision;
         }

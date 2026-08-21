@@ -24,3 +24,10 @@
 *.log
 sysinfo.txt
 crashlytics-build.properties
+EmotionService/.venv/
+EmotionService/__pycache__/
+EmotionService/tests/__pycache__/
+EmotionService/models/
+Releases/*
+!Releases/README.md
+!Releases/ReleaseIndex.md

@@ -21,8 +21,23 @@ namespace SrtpAvatar
         public bool preferAndroidNativeSpeech = true;
         public string speechLanguage = "zh-CN";
         public float speechRecognitionTimeoutSeconds = 20f;
+        [Tooltip("在前台空闲时自动开启系统语音识别；数字人播报期间会暂停，避免识别到自身语音。")]
+        public bool enableAutoConversation = true;
+        [Tooltip("自动识别结束或未听到语音后，重新开始聆听前的等待时间。")]
+        public float autoConversationRetryDelaySeconds = 1.2f;
         public float ttsBaseTimeoutSeconds = 5f;
         public float ttsSecondsPerCharacter = 0.25f;
+
+        [Header("Emotion Perception")]
+        public bool enableEmotionPerception = false;
+        [Tooltip("局域网服务仅用于开发；Android 本地模式不依赖电脑或自建服务器。")]
+        public EmotionRuntimeMode emotionRuntimeMode = EmotionRuntimeMode.LanService;
+        public string emotionServiceBaseUrl = "http://127.0.0.1:8000";
+        public int emotionRequestTimeoutSeconds = 10;
+        public float emotionCameraSampleIntervalSeconds = 1f;
+        public float emotionVoiceWindowSeconds = 4f;
+        public bool preferFrontEmotionCamera = true;
+        public bool showEmotionCameraPreview = false;
 
         [Header("Car Communication")]
         public bool enableCarCommunication = false;
@@ -51,5 +66,12 @@ namespace SrtpAvatar
             var root = RuntimeSecrets.ResolveDeepSeekBaseUrl(this).TrimEnd('/');
             return $"{root}/{path.TrimStart('/')}";
         }
+    }
+
+    public enum EmotionRuntimeMode
+    {
+        LanService,
+        AndroidOnDeviceFace,
+        Disabled
     }
 }

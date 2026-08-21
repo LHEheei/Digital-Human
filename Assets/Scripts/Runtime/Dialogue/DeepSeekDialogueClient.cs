@@ -37,7 +37,11 @@ namespace SrtpAvatar
 
             var messages = new List<ChatMessage>
             {
-                new ChatMessage { role = "system", content = DialoguePrompt.SystemPrompt }
+                new ChatMessage
+                {
+                    role = "system",
+                    content = DialoguePrompt.SystemPrompt + " 输入可能包含低风险情绪辅助信息；可据此温和调整语气、表情和动作。严禁声称、暗示或猜测你从摄像头、语音或任何信号得知了用户的情绪或状态；不要写“感觉你…、看起来你…、听起来你…、你似乎…、我看出你…、心情不错”等归因句。回复应只自然回应用户说出的内容。"
+                }
             };
 
             if (!string.IsNullOrWhiteSpace(longTermContext))
@@ -63,6 +67,11 @@ namespace SrtpAvatar
             {
                 model = RuntimeSecrets.ResolveDeepSeekModel(config),
                 temperature = 0.7f,
+                // A mobile avatar needs a prompt reply, not a long chain of thought.
+                // DeepSeek V4 enables thinking by default, which can delay the first
+                // response beyond the UI timeout for a simple dialogue turn.
+                thinking = new ThinkingOption { type = "disabled" },
+                max_tokens = 320,
                 response_format = new ResponseFormat { type = "json_object" },
                 messages = messages.ToArray()
             };
@@ -109,7 +118,15 @@ namespace SrtpAvatar
             public string model;
             public ChatMessage[] messages;
             public float temperature;
+            public ThinkingOption thinking;
+            public int max_tokens;
             public ResponseFormat response_format;
+        }
+
+        [Serializable]
+        private sealed class ThinkingOption
+        {
+            public string type;
         }
 
         [Serializable]
