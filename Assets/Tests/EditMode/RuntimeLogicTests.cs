@@ -356,6 +356,47 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void FaceEmotionTemporalFilter_RequiresThreeFramesBeforeNonNeutralOutput()
+        {
+            var filter = new FaceEmotionTemporalFilter();
+
+            Assert.AreEqual("neutral", filter.Observe(FaceSample("joy", .78f, .12f, 1)).label);
+            Assert.AreEqual("neutral", filter.Observe(FaceSample("joy", .80f, .10f, 2)).label);
+            var stable = filter.Observe(FaceSample("joy", .82f, .08f, 3));
+
+            Assert.AreEqual("joy", stable.label);
+            Assert.Greater(stable.score, .75f);
+            Assert.AreEqual(3, stable.capturedAtUnixMs);
+        }
+
+        [Test]
+        public void FaceEmotionTemporalFilter_ConvertsNearTieToConservativeNeutral()
+        {
+            var filter = new FaceEmotionTemporalFilter();
+            UserEmo result = null;
+            for (var index = 0; index < 5; index++)
+            {
+                result = filter.Observe(new UserEmo
+                {
+                    label = "angry",
+                    score = .42f,
+                    source = "face",
+                    capturedAtUnixMs = index + 1,
+                    scores = new[]
+                    {
+                        new EmotionScore { label = "angry", score = .42f },
+                        new EmotionScore { label = "sorrow", score = .38f },
+                        new EmotionScore { label = "neutral", score = .20f }
+                    }
+                });
+            }
+
+            Assert.NotNull(result);
+            Assert.AreEqual("neutral", result.label);
+            Assert.AreEqual(.65f, result.score);
+        }
+
+        [Test]
         public void CarCommand_UsesWhitelistFixedTokenAndStopPriority()
         {
             var config = ScriptableObject.CreateInstance<AppConfig>();
@@ -399,6 +440,25 @@ namespace SrtpAvatar.Tests
             Assert.IsFalse(AutoConversationPolicy.ShouldQuietlyRetry("系统语音识别网络失败。"));
             Assert.AreEqual(1.2f, AutoConversationPolicy.NormalizeRetryDelay(0f));
             Assert.AreEqual(.25f, AutoConversationPolicy.NormalizeRetryDelay(.1f));
+        }
+
+        private static UserEmo FaceSample(string label, float labelScore, float neutralScore, long capturedAt)
+        {
+            return new UserEmo
+            {
+                label = label,
+                score = labelScore,
+                source = "face",
+                capturedAtUnixMs = capturedAt,
+                scores = new[]
+                {
+                    new EmotionScore { label = label, score = labelScore },
+                    new EmotionScore { label = "neutral", score = neutralScore },
+                    new EmotionScore { label = "angry", score = label == "angry" ? labelScore : .02f },
+                    new EmotionScore { label = "sorrow", score = .04f },
+                    new EmotionScore { label = "surprised", score = .04f }
+                }
+            };
         }
     }
 }

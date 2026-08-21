@@ -18,6 +18,7 @@ namespace SrtpAvatar
         private AppConfig config;
         private IEmoService emotionService;
         private IFusionEmoService fusionService;
+        private FaceEmotionTemporalFilter nativeFaceFilter;
         private CancellationTokenSource lifetimeCancellation;
         private WebCamTexture cameraTexture;
         private RawImage cameraPreview;
@@ -53,6 +54,9 @@ namespace SrtpAvatar
             faceSessionId = Guid.NewGuid().ToString("N");
             emotionService = CreateEmotionService();
             fusionService = emotionService as IFusionEmoService;
+            nativeFaceFilter = config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
+                ? new FaceEmotionTemporalFilter()
+                : null;
             initialized = true;
             connectionStatus = config != null && config.enableEmotionPerception && config.emotionRuntimeMode != EmotionRuntimeMode.Disabled
                 ? config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace ? "感知：手机端本地人脸分析" : "感知：等待权限"
@@ -266,6 +270,10 @@ namespace SrtpAvatar
                 }
 
                 var result = await emotionService.GetFaceAsync(jpeg, cancellationToken);
+                if (result.IsUsable && nativeFaceFilter != null)
+                {
+                    result = nativeFaceFilter.Observe(result);
+                }
                 if (result.IsUsable)
                 {
                     FaceEmotion = result;

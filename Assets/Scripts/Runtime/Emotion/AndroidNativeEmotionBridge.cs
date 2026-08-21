@@ -7,12 +7,13 @@ using UnityEngine;
 namespace SrtpAvatar
 {
     /// <summary>
-    /// Android-only bridge for ML Kit's bundled face detector. The image stays
-    /// on the device; only a compact label is returned to Unity.
+    /// Android-only bridge for ML Kit face cropping and embedded HSEmotion ONNX
+    /// inference. The image stays on the device; only compact scores return.
     /// </summary>
     public sealed class AndroidNativeEmotionBridge : MonoBehaviour, IEmoService, IFusionEmoService, IEmotionCaptureCapabilities
     {
         private const char CallbackSeparator = '\n';
+        private const string FaceModelResourcePath = "Models/hsemotion_enet_b0_8_best_afew";
         private readonly Dictionary<string, TaskCompletionSource<UserEmo>> pendingRequests = new Dictionary<string, TaskCompletionSource<UserEmo>>();
 
 #if UNITY_ANDROID && !UNITY_EDITOR
@@ -143,7 +144,35 @@ namespace SrtpAvatar
 
             using var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer");
             var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity");
-            bridge = new AndroidJavaObject("com.srtp.avatar.NativeEmotionBridge", activity, gameObject.name);
+            var model = Resources.Load<TextAsset>(FaceModelResourcePath);
+            if (model == null)
+            {
+                throw new InvalidOperationException("未找到手机端 HSEmotion 模型资源。");
+            }
+
+            try
+            {
+                var modelBytes = model.bytes;
+                if (modelBytes == null || modelBytes.Length == 0)
+                {
+                    throw new InvalidOperationException("手机端 HSEmotion 模型资源为空。");
+                }
+
+                // Unity 6 maps sbyte[] to Java byte[]. Passing byte[] still works,
+                // but uses the obsolete JNI conversion path and emits a warning.
+                var signedModelBytes = new sbyte[modelBytes.Length];
+                Buffer.BlockCopy(modelBytes, 0, signedModelBytes, 0, modelBytes.Length);
+
+                bridge = new AndroidJavaObject(
+                    "com.srtp.avatar.NativeEmotionBridge",
+                    activity,
+                    gameObject.name,
+                    signedModelBytes);
+            }
+            finally
+            {
+                Resources.UnloadAsset(model);
+            }
         }
 #endif
     }
