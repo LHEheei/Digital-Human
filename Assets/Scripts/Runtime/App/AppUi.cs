@@ -1,52 +1,45 @@
+using System;
 using UnityEngine.UI;
 
 namespace SrtpAvatar
 {
     public sealed class AppUi
     {
-        private readonly Button microphoneButton;
+
         private readonly Text statusText;
         private readonly Text subtitleText;
         private readonly Text hintText;
 
-        public AppUi(Button microphoneButton, Text statusText, Text subtitleText, Text hintText)
+        public AppUi(Text statusText, Text subtitleText, Text hintText)
         {
-            this.microphoneButton = microphoneButton;
-            this.statusText = statusText;
-            this.subtitleText = subtitleText;
-            this.hintText = hintText;
+            this.statusText = Require(statusText, nameof(statusText));
+            this.subtitleText = Require(subtitleText, nameof(subtitleText));
+            this.hintText = Require(hintText, nameof(hintText));
         }
 
         public void SetStatus(string text)
         {
-            if (statusText != null)
-            {
-                statusText.text = text;
-            }
+            statusText.text = text;
         }
 
         public void SetSubtitle(string text)
         {
-            if (subtitleText != null)
-            {
-                subtitleText.text = text;
-            }
+            subtitleText.text = text;
         }
 
         public void SetHint(string text)
         {
-            if (hintText != null)
-            {
-                hintText.text = text;
-            }
+            hintText.text = text;
         }
 
-        public void SetMicrophoneInteractable(bool interactable)
+        private static T Require<T>(T value, string name) where T : UnityEngine.Object
         {
-            if (microphoneButton != null)
+            if (value == null)
             {
-                microphoneButton.interactable = interactable;
+                throw new ArgumentNullException(name, "Digital human UI reference is required.");
             }
+
+            return value;
         }
     }
 }

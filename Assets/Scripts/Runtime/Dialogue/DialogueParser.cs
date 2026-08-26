@@ -5,15 +5,6 @@ namespace SrtpAvatar
 {
     public static class DialogueParser
     {
-        public static DialogueDecision FromPossiblyWrappedJson(string raw)
-        {
-            if (TryFromPossiblyWrappedJson(raw, out var decision))
-            {
-                return decision;
-            }
-
-            return new DialogueDecision { reply = string.IsNullOrWhiteSpace(raw) ? "我理解了。" : raw.Trim() };
-        }
 
         public static bool TryFromPossiblyWrappedJson(string raw, out DialogueDecision decision)
         {

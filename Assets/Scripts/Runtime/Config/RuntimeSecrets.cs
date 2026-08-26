@@ -79,10 +79,6 @@ namespace SrtpAvatar
                 : config.deepSeekModel.Trim();
         }
 
-        public static string DeepSeekChatCompletionUrl(AppConfig config)
-        {
-            return DeepSeekChatCompletionUrl(ResolveDeepSeekBaseUrl(config));
-        }
 
         public static string DeepSeekChatCompletionUrl(string normalizedBaseUrl)
         {

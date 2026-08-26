@@ -38,11 +38,6 @@ class EmotionInference:
             "modelLoading": "ready" if self._face_landmarker.loaded and self._face_classifier.loaded and self._voice_model is not None else "warming",
         }
 
-    def warmup(self) -> None:
-        """Load all CPU models; retained for explicit offline warmup callers."""
-        self.warm_face()
-        self.warm_voice()
-
     def warm_face(self) -> None:
         with self._face_inference_lock:
             self._face_landmarker.warmup()

@@ -6,7 +6,7 @@ import wave
 import numpy
 
 from audio_quality import AudioSignalQuality, extract_active_pcm16_wav, has_speech_like_signal, measure_pcm16_wav
-from emotion_contract import EmotionResult, EmotionScore, failure, fusion, map_face_label, map_voice_label
+from emotion_contract import EmotionResult, EmotionScore, failure, fusion, map_voice_label
 from face_expression import ExpressionCandidate, FaceExpressionClassifier, FaceExpressionSession, FaceExpressionSessions
 from face_crop import crop_relative_face
 from face_quality import assess_face_crop
@@ -65,10 +65,6 @@ class EmotionContractTests(unittest.TestCase):
         self.assertEqual(["joy", "neutral"], [item.label for item in result.scores])
         self.assertEqual(1.0, result.scores[0].score)
         self.assertEqual(0.0, result.scores[1].score)
-        self.assertEqual(
-            [{"label": "joy", "score": 1.0}, {"label": "neutral", "score": 0.0}],
-            result.as_dict()["scores"],
-        )
         self.assertEqual(
             [{"label": "joy", "score": 1.0}, {"label": "neutral", "score": 0.0}],
             result.as_dict()["scores"],
@@ -223,8 +219,6 @@ class EmotionContractTests(unittest.TestCase):
             detection = SimpleNamespace(location_data=SimpleNamespace(relative_bounding_box=box))
             return SimpleNamespace(detections=[detection] * self._count)
     def test_label_mapping_accepts_only_project_categories(self):
-        self.assertEqual("joy", map_face_label("happy"))
-        self.assertEqual("sorrow", map_face_label("sad"))
         self.assertEqual("surprised", map_voice_label("surprise"))
         self.assertEqual("joy", map_voice_label("\u5f00\u5fc3/happy"))
         self.assertEqual("sorrow", map_voice_label("\u96be\u8fc7/sad"))

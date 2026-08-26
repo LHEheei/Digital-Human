@@ -10,6 +10,7 @@ namespace SrtpAvatar
         tts,
         network,
         auth,
+        aiUnavailable,
         badJson,
         config,
         car,

@@ -45,7 +45,7 @@ namespace SrtpAvatar
 
         public bool IsTtsSpeaking => ttsSpeaking;
 
-        public Task<string> RecognizeAsync(string language)
+        public Task<string> RecognizeAsync(string language, bool preferOnDevice)
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
             EnsureBridge();
@@ -57,7 +57,7 @@ namespace SrtpAvatar
             CancelRecognition();
             recognitionId = Guid.NewGuid().ToString("N");
             recognitionCompletion = new TaskCompletionSource<string>();
-            bridge.Call("startRecognition", NormalizeLanguage(language), recognitionId);
+            bridge.Call("startRecognition", NormalizeLanguage(language), recognitionId, preferOnDevice);
             return recognitionCompletion.Task;
 #else
             return Task.FromException<string>(new InvalidOperationException("当前环境没有可用的 Android 语音识别服务。"));

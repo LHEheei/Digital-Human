@@ -16,7 +16,6 @@ namespace SrtpAvatar
         [SerializeField] private AndroidNativeSpeechBridge androidSpeech;
         [SerializeField] private AndroidBluetoothCarBridge androidCar;
         [SerializeField] private AudioSource audioSource;
-        [SerializeField] private Button microphoneButton;
         [SerializeField] private Text statusText;
         [SerializeField] private Text subtitleText;
         [SerializeField] private Text hintText;
@@ -27,16 +26,18 @@ namespace SrtpAvatar
         private AvatarSpeechDriver avatarSpeechDriver;
         private EmotionPerceptionController emotionPerception;
         private EmotionStatusPanel emotionStatusPanel;
+        private EmotionEvaluationPanel emotionEvaluationPanel;
         private AppUi ui;
         private CancellationTokenSource conversationCancellation;
         private CancellationTokenSource autoListeningCancellation;
         private bool busy;
         private bool autoListening;
+        private bool isApplicationActive = true;
         private bool isDestroyed;
         private int autoListeningGeneration;
 
-        private bool CanUseDeepSeek => config != null && config.HasDeepSeekKey;
-        private bool CanAutoListen => config != null && config.enableAutoConversation && speechService != null && speechService.CanRecognize;
+        private bool CanUseDeepSeek => config.HasDeepSeekKey;
+        private bool CanAutoListen => CanUseDeepSeek && isApplicationActive && speechService.CanRecognize;
 
         private void Awake()
         {
@@ -45,67 +46,13 @@ namespace SrtpAvatar
             speechService = new SpeechService(config, androidSpeech);
             dialogueService = new DialogueService(config);
             carCommunicationService = new CarCommunicationService(config, androidCar);
-            ui = new AppUi(microphoneButton, statusText, subtitleText, hintText);
+            ui = new AppUi(statusText, subtitleText, hintText);
         }
 
         private void Start()
         {
-            if (microphoneButton != null)
-            {
-                microphoneButton.onClick.AddListener(() => _ = RunConversationAsync());
-            }
-
             ShowIdle();
             ScheduleAutoListening();
-        }
-
-        public async Task RunConversationAsync()
-        {
-            StopAutoListening();
-            if (!TryBeginConversation(out var cancellationToken))
-            {
-                return;
-            }
-
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                SetState(AvatarState.listening, "倾听");
-                SetSubtitle("请说话...");
-
-                emotionPerception?.SuspendAudioCapture();
-                string userText;
-                try
-                {
-                    userText = await speechService.ListenForUserTextAsync(SetSubtitle, cancellationToken);
-                }
-                finally
-                {
-                    emotionPerception?.ResumeAudioCapture();
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                await RespondToUserTextAsync(userText, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                Debug.Log("Conversation canceled.");
-            }
-            catch (AppException ex)
-            {
-                Debug.LogException(ex);
-                ShowRecoverableError(ex.Error);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogException(ex);
-                ShowRecoverableError(AppErr.unknown);
-            }
-            finally
-            {
-                FinishConversation(cancellationToken);
-                ScheduleAutoListening();
-            }
         }
 
         private void ScheduleAutoListening()
@@ -132,7 +79,7 @@ namespace SrtpAvatar
             {
                 SetState(AvatarState.listening, "倾听");
                 SetSubtitle("正在聆听，直接说话即可开始对话");
-                SetHint("自动语音交互已开启；MIC 可用于手动重试。");
+                SetHint("自动语音交互已开启；直接说话即可。回复时会暂停聆听。");
 
                 emotionPerception?.SuspendAudioCapture();
                 string userText;
@@ -162,7 +109,7 @@ namespace SrtpAvatar
                     Debug.LogWarning("Automatic speech recognition failed: " + ex.Message);
                     SetState(AvatarState.idle, "空闲");
                     SetSubtitle("自动语音识别暂不可用，正在重试...");
-                    SetHint("可点击 MIC 手动重试；请检查系统语音识别和网络。");
+                    SetHint("请检查系统语音识别服务、网络和麦克风权限；系统会自动重试。");
                 }
             }
             finally
@@ -176,6 +123,7 @@ namespace SrtpAvatar
                 var shouldRestart = generation == autoListeningGeneration && CanAutoListen && !busy && !isDestroyed;
                 if (shouldRestart)
                 {
+                    SetHint("回复结束，正在恢复聆听...");
                     try
                     {
                         var delay = AutoConversationPolicy.NormalizeRetryDelay(config.autoConversationRetryDelaySeconds);
@@ -213,7 +161,7 @@ namespace SrtpAvatar
             catch (AppException ex)
             {
                 Debug.LogException(ex);
-                ShowRecoverableError(ex.Error);
+                ShowRecoverableError(ex.Error, ex.Message);
             }
             catch (Exception ex)
             {
@@ -235,7 +183,6 @@ namespace SrtpAvatar
             }
 
             busy = true;
-            SetButtonInteractable(false);
             conversationCancellation?.Cancel();
             conversationCancellation?.Dispose();
             conversationCancellation = new CancellationTokenSource();
@@ -247,12 +194,13 @@ namespace SrtpAvatar
         {
             cancellationToken.ThrowIfCancellationRequested();
             SetState(AvatarState.thinking, "思考");
-            SetSubtitle("正在理解你的语音...");
+            SetSubtitle($"你：{userText.Trim()}");
+            SetHint("正在理解你的语音...");
 
             var input = new TalkInput { text = userText };
             input = emotionPerception == null ? input : emotionPerception.ApplyLatest(input);
             var decision = await dialogueService.DecideAsync(input, cancellationToken);
-            var finalHint = await PresentReplyAsync(decision, cancellationToken);
+            var finalHint = await PresentReplyAsync(userText, decision, cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
             SetState(AvatarState.idle, "空闲");
@@ -261,11 +209,6 @@ namespace SrtpAvatar
 
         private void FinishConversation(CancellationToken cancellationToken)
         {
-            if (!isDestroyed)
-            {
-                SetButtonInteractable(true);
-            }
-
             busy = false;
             if (conversationCancellation != null && conversationCancellation.Token == cancellationToken)
             {
@@ -282,15 +225,15 @@ namespace SrtpAvatar
             speechService?.Input.Cancel();
         }
 
-        private async Task<string> PresentReplyAsync(DialogueDecision decision, CancellationToken cancellationToken)
+        private async Task<string> PresentReplyAsync(string userText, DialogueDecision decision, CancellationToken cancellationToken)
         {
-            var safeDecision = decision == null ? new DialogueDecision() : decision.Normalize();
+            var safeDecision = decision.Normalize();
             cancellationToken.ThrowIfCancellationRequested();
 
             avatarSpeechDriver.SetEmotion(safeDecision.ParsedEmotion);
             avatarSpeechDriver.PlayGesture(safeDecision.ParsedGesture);
             SetState(AvatarState.speaking, "说话");
-            SetSubtitle(safeDecision.reply);
+            SetSubtitle(AutoConversationPolicy.FormatTurn(userText, safeDecision.reply));
             SetHint($"表情：{safeDecision.emotion} · 动作：{safeDecision.gesture}");
             var carTask = RunCarCommandAsync(safeDecision, cancellationToken);
 
@@ -328,12 +271,6 @@ namespace SrtpAvatar
             {
                 throw;
             }
-            catch (AppException ex)
-            {
-                Debug.LogWarning($"Car communication failed: {ex.Message}");
-                SetHint("小车指令执行失败。");
-                return "小车指令执行失败。";
-            }
             catch (Exception ex)
             {
                 Debug.LogWarning($"Car communication failed: {ex.Message}");
@@ -370,11 +307,11 @@ namespace SrtpAvatar
             if (config == null)
             {
                 config = Resources.Load<AppConfig>("OpenAIConfig");
-                if (config == null)
-                {
-                    config = ScriptableObject.CreateInstance<AppConfig>();
-                    Debug.LogWarning("未找到 OpenAIConfig.asset，已使用不含 Key 的默认演示配置。");
-                }
+            }
+
+            if (config == null)
+            {
+                throw new InvalidOperationException("缺少必需配置 Assets/Resources/OpenAIConfig.asset。");
             }
         }
 
@@ -391,6 +328,12 @@ namespace SrtpAvatar
             emotionPerception.Initialize(config);
             emotionStatusPanel.Initialize(emotionPerception);
 
+            if (config.enableEmotionEvaluationPanel)
+            {
+                emotionEvaluationPanel = GetOrAddComponent(emotionEvaluationPanel);
+                emotionEvaluationPanel.Initialize(emotionPerception);
+            }
+
             if (gameObject.GetComponent<ApiConfigPanel>() == null)
             {
                 gameObject.AddComponent<ApiConfigPanel>();
@@ -405,27 +348,27 @@ namespace SrtpAvatar
         private void ShowIdle()
         {
             SetState(AvatarState.idle, "空闲");
-            SetSubtitle(CanAutoListen ? "直接说话即可开始对话" : "点击麦克风开始对话");
+            SetSubtitle(CanAutoListen ? "正在聆听，直接说话即可开始对话" : "请先完成 API 和系统语音服务配置");
             SetHint(ResolveStartupHint());
         }
 
-        private void ShowRecoverableError(AppErr error)
+        private void ShowRecoverableError(AppErr error, string message = null)
         {
             avatarSpeechDriver.SetEmotion(AvatarEmotion.sorrow);
             avatarSpeechDriver.PlayGesture(AvatarGesture.nod);
             SetState(AvatarState.idle, "空闲");
-            SetSubtitle(ToUserFacingError(error));
+            SetSubtitle(string.IsNullOrWhiteSpace(message) ? ToUserFacingError(error) : message);
             SetHint(ResolveErrorHint(error));
         }
 
         private string ResolveStartupHint()
         {
-            var input = speechService.CanRecognize ? "输入：Android ASR" : "输入：本地模拟";
-            var output = speechService.CanSpeak ? "输出：Android TTS" : "输出：本地提示音";
-            var interaction = CanAutoListen ? "交互：自动聆听" : "交互：点击 MIC";
-            var dialogue = CanUseDeepSeek ? "对话：DeepSeek" : "对话：本地演示";
-            var memory = config != null && config.enableLongTermMemory ? "记忆：启用" : "记忆：关闭";
-            var car = config != null && config.enableCarCommunication && config.carCommunicationMode != CarCommunicationMode.Disabled ? "小车：启用" : "小车：关闭";
+            var input = speechService.CanRecognize ? "输入：Android ASR" : "输入：系统语音不可用";
+            var output = speechService.CanSpeak ? "输出：Android TTS" : "输出：系统 TTS 不可用";
+            var interaction = CanAutoListen ? "交互：自动聆听" : "交互：等待语音服务";
+            var dialogue = CanUseDeepSeek ? "对话：DeepSeek" : "对话：AI 未配置";
+            var memory = config.enableLongTermMemory ? "记忆：启用" : "记忆：关闭";
+            var car = config.enableCarCommunication && config.carCommunicationMode != CarCommunicationMode.Disabled ? "小车：启用" : "小车：关闭";
             return $"{input} · {output} · {interaction}\n{dialogue} · {memory} · {car}";
         }
 
@@ -433,22 +376,29 @@ namespace SrtpAvatar
         {
             avatarSpeechDriver.SetState(state);
 
-            ui?.SetStatus(label);
+            ui.SetStatus(label);
         }
 
         private void SetSubtitle(string message)
         {
-            ui?.SetSubtitle(message);
+            ui.SetSubtitle(message);
         }
 
         private void SetHint(string message)
         {
-            ui?.SetHint(message);
+            ui.SetHint(message);
         }
 
-        private void SetButtonInteractable(bool interactable)
+        private void OnApplicationPause(bool paused)
         {
-            ui?.SetMicrophoneInteractable(interactable);
+            isApplicationActive = !paused;
+            if (paused)
+            {
+                StopAutoListening();
+                return;
+            }
+
+            ScheduleAutoListening();
         }
 
         private void OnDestroy()
@@ -472,6 +422,7 @@ namespace SrtpAvatar
                 case AppErr.tts: return "语音播报失败，已切换提示音。";
                 case AppErr.network: return "网络连接失败，请稍后重试。";
                 case AppErr.auth: return "API 认证失败，请检查设置。";
+                case AppErr.aiUnavailable: return "AI 未连接，请点击右上角 API 按钮完成配置。";
                 case AppErr.badJson: return "对话服务返回格式异常。";
                 case AppErr.config: return "API 配置无效，请检查设置。";
                 case AppErr.car: return "小车通讯失败。";
@@ -481,7 +432,14 @@ namespace SrtpAvatar
 
         private static string ResolveErrorHint(AppErr error)
         {
-            return error == AppErr.micPerm ? "可重新授权；若已禁止，请前往系统设置开启。" : "请检查网络、设备状态和 API 设置。";
+            if (error == AppErr.micPerm)
+            {
+                return "可重新授权；若已禁止，请前往系统设置开启。";
+            }
+
+            return error == AppErr.aiUnavailable
+                ? "请填写 DeepSeek 的 Base URL、模型名和 Key 后重试。"
+                : "请检查网络、设备状态和 API 设置。";
         }
     }
 }

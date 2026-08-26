@@ -2,6 +2,7 @@ package com.srtp.avatar;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
@@ -10,6 +11,11 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 
 import com.unity3d.player.UnityPlayer;
+
+import org.json.JSONObject;
+import org.vosk.Model;
+import org.vosk.Recognizer;
+import org.vosk.android.StorageService;
 
 import java.util.ArrayList;
 import java.util.Locale;
@@ -20,22 +26,37 @@ public final class NativeSpeechBridge {
     private SpeechRecognizer speechRecognizer;
     private TextToSpeech textToSpeech;
     private boolean ttsReady;
+    private boolean usingOnDeviceRecognizer;
+    private String activeSystemSessionId;
+
+    private static final String OFFLINE_MODEL_ASSET = "vosk-model-small-cn-0.22";
+    private static final String OFFLINE_MODEL_STORAGE = "srtp-vosk-model";
+    private static final float OFFLINE_SAMPLE_RATE = 16000.0f;
+    private static final int OFFLINE_LISTEN_TIMEOUT_MILLIS = 15000;
+
+    private Model offlineModel;
+    private Recognizer offlineRecognizer;
+    private org.vosk.android.SpeechService offlineSpeechService;
+    private String offlineSessionId;
+    private boolean offlineModelLoading;
+    private String offlineInitError = "";
 
     public NativeSpeechBridge(Activity activity, String unityObjectName) {
         this.activity = activity;
         this.unityObjectName = unityObjectName;
         initializeTextToSpeech();
+        initializeOfflineModel();
     }
 
     public boolean isSpeechRecognitionAvailable() {
-        return activity != null && SpeechRecognizer.isRecognitionAvailable(activity);
+        return activity != null && (isSystemRecognitionAvailable() || offlineModel != null || offlineModelLoading);
     }
 
     public boolean isTextToSpeechAvailable() {
         return activity != null && textToSpeech != null && ttsReady;
     }
 
-    public void startRecognition(final String languageTag, final String sessionId) {
+    public void startRecognition(final String languageTag, final String sessionId, final boolean preferOnDevice) {
         if (activity == null) {
             send(sessionId, "OnAndroidSpeechError", "Android Activity 不可用。");
             return;
@@ -45,22 +66,27 @@ public final class NativeSpeechBridge {
             @Override
             public void run() {
                 try {
-                    if (!SpeechRecognizer.isRecognitionAvailable(activity)) {
-                        send(sessionId, "OnAndroidSpeechError", "当前手机没有可用的系统语音识别服务。");
+                    if (!isSystemRecognitionAvailable()) {
+                        releaseSystemSpeechRecognizer();
+                        if (startOfflineRecognition(sessionId)) {
+                            return;
+                        }
+
+                        send(sessionId, "OnAndroidSpeechError", offlineUnavailableMessage());
                         return;
                     }
 
-                    if (speechRecognizer != null) {
-                        speechRecognizer.destroy();
-                    }
-
-                    speechRecognizer = SpeechRecognizer.createSpeechRecognizer(activity);
+                    stopOfflineRecognition();
+                    releaseSystemSpeechRecognizer();
+                    speechRecognizer = createSpeechRecognizer(preferOnDevice);
+                    activeSystemSessionId = sessionId;
                     speechRecognizer.setRecognitionListener(new UnityRecognitionListener(sessionId));
 
                     Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, normalizeLanguage(languageTag));
                     intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+                    intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, usingOnDeviceRecognizer);
                     intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
                     // These are advisory values, but on supported recognizers they make a
                     // spoken turn finish promptly without requiring the user to tap again.
@@ -69,6 +95,9 @@ public final class NativeSpeechBridge {
                     intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1100);
                     speechRecognizer.startListening(intent);
                 } catch (Exception ex) {
+                    if (sessionId.equals(activeSystemSessionId)) {
+                        releaseSystemSpeechRecognizer();
+                    }
                     send(sessionId, "OnAndroidSpeechError", ex.getMessage());
                 }
             }
@@ -83,11 +112,8 @@ public final class NativeSpeechBridge {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (speechRecognizer != null) {
-                    speechRecognizer.cancel();
-                    speechRecognizer.destroy();
-                    speechRecognizer = null;
-                }
+                stopOfflineRecognition();
+                releaseSystemSpeechRecognizer();
             }
         });
     }
@@ -149,9 +175,11 @@ public final class NativeSpeechBridge {
         activity.runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                if (speechRecognizer != null) {
-                    speechRecognizer.destroy();
-                    speechRecognizer = null;
+                stopOfflineRecognition();
+                releaseSystemSpeechRecognizer();
+                if (offlineModel != null) {
+                    offlineModel.close();
+                    offlineModel = null;
                 }
 
                 if (textToSpeech != null) {
@@ -194,6 +222,142 @@ public final class NativeSpeechBridge {
                 }
             }
         });
+    }
+
+    private void initializeOfflineModel() {
+        if (activity == null || offlineModel != null || offlineModelLoading) {
+            return;
+        }
+
+        offlineModelLoading = true;
+        offlineInitError = "";
+        try {
+            StorageService.unpack(
+                activity.getApplicationContext(),
+                OFFLINE_MODEL_ASSET,
+                OFFLINE_MODEL_STORAGE,
+                model -> {
+                    offlineModel = model;
+                    offlineModelLoading = false;
+                    offlineInitError = "";
+                },
+                exception -> {
+                    offlineModelLoading = false;
+                    offlineInitError = "离线语音模型加载失败：" + safeExceptionMessage(exception);
+                });
+        } catch (Exception ex) {
+            offlineModelLoading = false;
+            offlineInitError = "离线语音模型加载失败：" + safeExceptionMessage(ex);
+        }
+    }
+
+    private boolean isSystemRecognitionAvailable() {
+        return activity != null && (SpeechRecognizer.isRecognitionAvailable(activity) || isOnDeviceRecognitionAvailable());
+    }
+
+    private boolean startOfflineRecognition(String sessionId) {
+        if (offlineModel == null) {
+            initializeOfflineModel();
+            return false;
+        }
+
+        releaseSystemSpeechRecognizer();
+        stopOfflineRecognition();
+        try {
+            offlineRecognizer = new Recognizer(offlineModel, OFFLINE_SAMPLE_RATE);
+            offlineRecognizer.setEndpointerDelays(5.0f, 0.8f, 15.0f);
+            offlineSpeechService = new org.vosk.android.SpeechService(offlineRecognizer, OFFLINE_SAMPLE_RATE);
+            offlineSessionId = sessionId;
+            if (!offlineSpeechService.startListening(new UnityOfflineRecognitionListener(sessionId), OFFLINE_LISTEN_TIMEOUT_MILLIS)) {
+                stopOfflineRecognition();
+                return false;
+            }
+            return true;
+        } catch (Exception ex) {
+            offlineInitError = "离线语音识别启动失败：" + safeExceptionMessage(ex);
+            stopOfflineRecognition();
+            return false;
+        }
+    }
+
+    private void stopOfflineRecognition() {
+        offlineSessionId = null;
+        if (offlineSpeechService != null) {
+            offlineSpeechService.cancel();
+            offlineSpeechService.shutdown();
+            offlineSpeechService = null;
+        }
+        if (offlineRecognizer != null) {
+            offlineRecognizer.close();
+            offlineRecognizer = null;
+        }
+    }
+
+    private void finishOfflineRecognition(String sessionId, String text, String error) {
+        if (offlineSessionId == null || !offlineSessionId.equals(sessionId)) {
+            return;
+        }
+
+        stopOfflineRecognition();
+        if (error != null) {
+            send(sessionId, "OnAndroidSpeechError", error);
+        } else if (text == null || text.trim().length() == 0) {
+            send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");
+        } else {
+            send(sessionId, "OnAndroidSpeechResult", text.trim());
+        }
+    }
+
+    private void releaseSystemSpeechRecognizer() {
+        activeSystemSessionId = null;
+        if (speechRecognizer != null) {
+            speechRecognizer.cancel();
+            speechRecognizer.destroy();
+            speechRecognizer = null;
+        }
+    }
+
+    private String offlineUnavailableMessage() {
+        if (offlineModelLoading) {
+            return "离线语音模型正在准备，请稍后重试。";
+        }
+        if (offlineInitError != null && offlineInitError.length() > 0) {
+            return offlineInitError;
+        }
+        return "当前手机没有可用的语音识别服务，离线语音模型也不可用。";
+    }
+
+    private String extractVoskText(String hypothesis) {
+        try {
+            return new JSONObject(hypothesis == null ? "" : hypothesis).optString("text", "").trim();
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private String safeExceptionMessage(Exception exception) {
+        return exception == null || exception.getMessage() == null || exception.getMessage().length() == 0
+            ? "未知错误。"
+            : exception.getMessage();
+    }
+    private SpeechRecognizer createSpeechRecognizer(boolean preferOnDevice) {
+        usingOnDeviceRecognizer = false;
+        if (preferOnDevice && isOnDeviceRecognitionAvailable()) {
+            try {
+                usingOnDeviceRecognizer = true;
+                return SpeechRecognizer.createOnDeviceSpeechRecognizer(activity);
+            } catch (Exception ignored) {
+                usingOnDeviceRecognizer = false;
+            }
+        }
+
+        return SpeechRecognizer.createSpeechRecognizer(activity);
+    }
+
+    private boolean isOnDeviceRecognitionAvailable() {
+        return activity != null
+            && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            && SpeechRecognizer.isOnDeviceRecognitionAvailable(activity);
     }
 
     private String normalizeLanguage(String languageTag) {
@@ -255,11 +419,25 @@ public final class NativeSpeechBridge {
 
         @Override
         public void onError(int error) {
+            if (!sessionId.equals(activeSystemSessionId)) {
+                return;
+            }
+
+            activeSystemSessionId = null;
+            if ((error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)
+                && startOfflineRecognition(sessionId)) {
+                return;
+            }
             send(sessionId, "OnAndroidSpeechError", errorMessage(error));
         }
 
         @Override
         public void onResults(Bundle results) {
+            if (!sessionId.equals(activeSystemSessionId)) {
+                return;
+            }
+
+            activeSystemSessionId = null;
             ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             if (matches == null || matches.size() == 0) {
                 send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");
@@ -278,6 +456,40 @@ public final class NativeSpeechBridge {
         }
     }
 
+    private final class UnityOfflineRecognitionListener implements org.vosk.android.RecognitionListener {
+        private final String sessionId;
+
+        UnityOfflineRecognitionListener(String sessionId) {
+            this.sessionId = sessionId;
+        }
+
+        @Override
+        public void onPartialResult(String hypothesis) {
+        }
+
+        @Override
+        public void onResult(String hypothesis) {
+            String text = extractVoskText(hypothesis);
+            if (text.length() > 0) {
+                finishOfflineRecognition(sessionId, text, null);
+            }
+        }
+
+        @Override
+        public void onFinalResult(String hypothesis) {
+            finishOfflineRecognition(sessionId, extractVoskText(hypothesis), null);
+        }
+
+        @Override
+        public void onError(Exception exception) {
+            finishOfflineRecognition(sessionId, null, "离线语音识别失败：" + safeExceptionMessage(exception));
+        }
+
+        @Override
+        public void onTimeout() {
+            finishOfflineRecognition(sessionId, null, "没有听到说话。" );
+        }
+    }
     private String errorMessage(int error) {
         switch (error) {
             case SpeechRecognizer.ERROR_AUDIO:
@@ -288,7 +500,9 @@ public final class NativeSpeechBridge {
                 return "没有麦克风权限。";
             case SpeechRecognizer.ERROR_NETWORK:
             case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:
-                return "系统语音识别网络失败。";
+                return usingOnDeviceRecognizer
+                    ? "设备端语音识别不可用，请在系统设置下载中文离线语音包后重试。"
+                    : "系统语音识别网络失败，请确认系统语音服务可联网，或下载中文离线语音包。";
             case SpeechRecognizer.ERROR_NO_MATCH:
                 return "没有识别到语音内容。";
             case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:

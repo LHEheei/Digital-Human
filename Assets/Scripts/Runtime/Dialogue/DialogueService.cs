@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -13,13 +14,13 @@ namespace SrtpAvatar
 
         public DialogueService(AppConfig config)
         {
-            this.config = config;
+            this.config = config ?? throw new ArgumentNullException(nameof(config));
             deepSeekClient = new DeepSeekDialogueClient(config);
             conversationMemory = new ConversationMemory();
             longTermMemory = new LongTermMemoryStore();
         }
 
-        public bool CanUseDeepSeek => config != null && config.HasDeepSeekKey;
+        public bool CanUseDeepSeek => config.HasDeepSeekKey;
 
         public Task<DialogueDecision> DecideAsync(string userText, CancellationToken cancellationToken = default)
         {
@@ -28,9 +29,14 @@ namespace SrtpAvatar
 
         public async Task<DialogueDecision> DecideAsync(TalkInput input, CancellationToken cancellationToken = default)
         {
-            input = (input ?? new TalkInput()).Normalize();
+            input = (input ?? throw new ArgumentNullException(nameof(input))).Normalize();
             var userText = input.text;
             cancellationToken.ThrowIfCancellationRequested();
+            if (!CanUseDeepSeek)
+            {
+                throw new AppException(AppErr.aiUnavailable, "AI 未配置，请点击右上角 API 按钮填写 DeepSeek Key。");
+            }
+
             if (ConversationMemory.IsClearRequest(userText))
             {
                 conversationMemory.Clear();
@@ -44,9 +50,7 @@ namespace SrtpAvatar
                 };
             }
 
-            var decision = CanUseDeepSeek
-                ? await DecideWithDeepSeekAsync(input, cancellationToken)
-                : LocalDemoDialogue.Decide(userText);
+            var decision = await DecideWithDeepSeekAsync(input, cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
             decision = EmotionResponsePolicy.Apply(decision, input.fusionEmo);
@@ -68,18 +72,13 @@ namespace SrtpAvatar
 
         private void Remember(string userText, DialogueDecision decision)
         {
-            if (decision == null)
-            {
-                return;
-            }
-
             var safeDecision = decision.Normalize();
-            if (config != null && config.enableConversationMemory)
+            if (config.enableConversationMemory)
             {
                 conversationMemory.Add(userText, safeDecision, config.maxMemoryTurns);
             }
 
-            if (config != null && config.enableLongTermMemory && longTermMemory.Remember(safeDecision.memory, config.maxLongTermMemories))
+            if (config.enableLongTermMemory && longTermMemory.Remember(safeDecision.memory, config.maxLongTermMemories))
             {
                 Debug.Log($"Long-term memory updated: {longTermMemory.FilePath}");
             }

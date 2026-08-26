@@ -89,17 +89,6 @@ def failure(source: str, error: str, captured_at: Optional[int] = None) -> Emoti
     ).normalized()
 
 
-def map_face_label(value: str) -> str:
-    mapping = {
-        "happy": "joy",
-        "sad": "sorrow",
-        "surprise": "surprised",
-        "angry": "angry",
-        "neutral": "neutral",
-    }
-    return mapping.get((value or "").strip().lower(), "neutral")
-
-
 def map_voice_label(value: str) -> str:
     normalized = (value or "").strip().lower()
     if "/" in normalized:

@@ -8,6 +8,9 @@ dependencies {
     // Both dependencies run locally on the phone; the installed app does not contact a model service.
     implementation 'com.google.mlkit:face-detection:16.1.7'
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.24.3'
+    // Bundled Chinese speech-to-text fallback. It runs in-process and needs no network service.
+    implementation 'net.java.dev.jna:jna:5.18.1@aar'
+    implementation 'com.alphacephei:vosk-android:0.3.75@aar'
 **DEPS**}
 
 android {

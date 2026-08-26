@@ -47,29 +47,30 @@ namespace SrtpAvatar
         public string FaceStatus { get; private set; } = "等待面部采集";
         public string VoiceStatus { get; private set; } = "等待语音采集";
         public event Action Updated;
+        public event Action<UserEmo, UserEmo> FaceEmotionObserved;
 
         public void Initialize(AppConfig appConfig)
         {
-            config = appConfig;
+            config = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
             faceSessionId = Guid.NewGuid().ToString("N");
             emotionService = CreateEmotionService();
             fusionService = emotionService as IFusionEmoService;
-            nativeFaceFilter = config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
+            nativeFaceFilter = config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
                 ? new FaceEmotionTemporalFilter()
                 : null;
             initialized = true;
-            connectionStatus = config != null && config.enableEmotionPerception && config.emotionRuntimeMode != EmotionRuntimeMode.Disabled
+            connectionStatus = config.enableEmotionPerception && config.emotionRuntimeMode != EmotionRuntimeMode.Disabled
                 ? config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace ? "感知：手机端本地人脸分析" : "感知：等待权限"
                 : "感知：已关闭";
-            if (config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace)
+            if (config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace)
             {
-                VoiceStatus = "端侧声学情绪模型待接入；对话仍会使用语句内容。";
+                VoiceStatus = "端侧语音情绪模型正在初始化。";
             }
         }
 
         public TalkInput ApplyLatest(TalkInput input)
         {
-            var target = input ?? new TalkInput();
+            var target = input ?? throw new ArgumentNullException(nameof(input));
             var now = EmotionTime.UtcNowUnixMs;
             target.faceEmo = EmotionSamplingPolicy.FreshOrNull(FaceEmotion, now, EmotionSamplingPolicy.FaceFreshnessMs);
             target.voiceEmo = EmotionSamplingPolicy.FreshOrNull(VoiceEmotion, now, EmotionSamplingPolicy.VoiceFreshnessMs);
@@ -222,7 +223,7 @@ namespace SrtpAvatar
 
         private IEmoService CreateEmotionService()
         {
-            if (config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace)
+            if (config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace)
             {
                 return GetComponent<AndroidNativeEmotionBridge>() ?? gameObject.AddComponent<AndroidNativeEmotionBridge>();
             }
@@ -230,17 +231,17 @@ namespace SrtpAvatar
             return new HttpEmoService(config, faceSessionId);
         }
 
-        private bool IsPerceptionEnabled => config != null && config.enableEmotionPerception && config.emotionRuntimeMode != EmotionRuntimeMode.Disabled;
+        private bool IsPerceptionEnabled => config.enableEmotionPerception && config.emotionRuntimeMode != EmotionRuntimeMode.Disabled;
 
         private bool SupportsFaceCapture => !(emotionService is IEmotionCaptureCapabilities capabilities) || capabilities.SupportsFaceCapture;
 
         private bool SupportsVoiceCapture => !(emotionService is IEmotionCaptureCapabilities capabilities) || capabilities.SupportsVoiceCapture;
 
-        private string ActiveConnectionStatus => config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
+        private string ActiveConnectionStatus => config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
             ? "感知：手机端本地人脸分析"
             : "感知：服务连接正常";
 
-        private string ActiveConnectionErrorStatus => config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
+        private string ActiveConnectionErrorStatus => config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
             ? "感知：手机端本地分析异常"
             : "感知：服务连接异常";
 
@@ -269,10 +270,11 @@ namespace SrtpAvatar
                     return;
                 }
 
-                var result = await emotionService.GetFaceAsync(jpeg, cancellationToken);
-                if (result.IsUsable && nativeFaceFilter != null)
+                var rawResult = await emotionService.GetFaceAsync(jpeg, cancellationToken);
+                var result = rawResult;
+                if (rawResult.IsUsable && nativeFaceFilter != null)
                 {
-                    result = nativeFaceFilter.Observe(result);
+                    result = nativeFaceFilter.Observe(rawResult);
                 }
                 if (result.IsUsable)
                 {
@@ -280,6 +282,7 @@ namespace SrtpAvatar
                     consecutiveFaceMisses = 0;
                     FaceStatus = "";
                     connectionStatus = ActiveConnectionStatus;
+                    FaceEmotionObserved?.Invoke(rawResult, result);
                     NotifyUpdated();
                     await RefreshFusionAsync(cancellationToken);
                 }
@@ -299,6 +302,7 @@ namespace SrtpAvatar
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 FaceStatus = "请求失败：" + ex.Message;
                 connectionStatus = ActiveConnectionErrorStatus;
                 NotifyUpdated();
@@ -341,6 +345,7 @@ namespace SrtpAvatar
             }
             catch (Exception ex)
             {
+                Debug.LogException(ex);
                 VoiceStatus = "请求失败：" + ex.Message;
                 connectionStatus = ActiveConnectionErrorStatus;
                 NotifyUpdated();
@@ -437,7 +442,7 @@ namespace SrtpAvatar
             }
 
             var requestedFrames = Mathf.RoundToInt(Mathf.Clamp(config.emotionVoiceWindowSeconds, 1f, 10f) * VoiceSampleRate);
-            if (Time.unscaledTime - microphoneStartedAt < config.emotionVoiceWindowSeconds || position < 0)
+            if (Time.unscaledTime - microphoneStartedAt < config.emotionVoiceWindowSeconds)
             {
                 return null;
             }
@@ -494,9 +499,10 @@ namespace SrtpAvatar
             Updated?.Invoke();
         }
 
+
         private void CreateCameraPreviewIfEnabled()
         {
-            if (config == null || !config.showEmotionCameraPreview || cameraTexture == null)
+            if (!config.showEmotionCameraPreview || cameraTexture == null)
             {
                 return;
             }

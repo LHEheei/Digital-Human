@@ -21,6 +21,7 @@ MonoBehaviour:
   enableLongTermMemory: 1
   maxLongTermMemories: 20
   preferAndroidNativeSpeech: 1
+  preferOnDeviceSpeechRecognition: 1
   speechLanguage: zh-CN
   speechRecognitionTimeoutSeconds: 20
   enableAutoConversation: 1
@@ -35,6 +36,7 @@ MonoBehaviour:
   emotionVoiceWindowSeconds: 4
   preferFrontEmotionCamera: 1
   showEmotionCameraPreview: 1
+  enableEmotionEvaluationPanel: 1
   enableCarCommunication: 0
   carCommunicationMode: 1
   carHttpEndpoint:
@@ -49,5 +51,3 @@ MonoBehaviour:
   carCommandSpeedUp: U
   carCommandSlowDown: D
   carBluetoothCommandSuffix: \n
-  useLocalDemoWhenDeepSeekKeyMissing: 1
-  localDemoUserText: "\u4F60\u662F\u8C01"

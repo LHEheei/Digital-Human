@@ -15,8 +15,13 @@ namespace SrtpAvatar
 
         public HttpEmoService(AppConfig config, string sessionId = "")
         {
-            baseUrl = config == null ? "" : config.emotionServiceBaseUrl;
-            timeoutSeconds = config == null ? 10 : Mathf.Clamp(config.emotionRequestTimeoutSeconds, 5, 30);
+            if (config == null)
+            {
+                throw new ArgumentNullException(nameof(config));
+            }
+
+            baseUrl = NormalizeBaseUrl(config.emotionServiceBaseUrl);
+            timeoutSeconds = Mathf.Clamp(config.emotionRequestTimeoutSeconds, 5, 30);
             faceSessionId = sessionId?.Trim() ?? "";
         }
 
@@ -33,10 +38,10 @@ namespace SrtpAvatar
             return UploadMediaAsync("/v1/emotions/voice", audio, "audio/wav", "voice", cancellationToken);
         }
 
-        public async Task<UserEmo> GetFusionAsync(UserEmo face, UserEmo voice, CancellationToken cancellationToken)
+        public Task<UserEmo> GetFusionAsync(UserEmo face, UserEmo voice, CancellationToken cancellationToken)
         {
             var body = new FusionRequest { face = face, voice = voice };
-            return await SendJsonAsync("/v1/emotions/fusion", JsonUtility.ToJson(body), "fusion", cancellationToken);
+            return SendJsonAsync("/v1/emotions/fusion", JsonUtility.ToJson(body), "fusion", cancellationToken);
         }
 
         public static bool TryParseResult(string json, string expectedSource, out UserEmo result)
@@ -65,45 +70,24 @@ namespace SrtpAvatar
                 return UserEmo.Failure(source, "没有可上传的识别数据。");
             }
 
-            try
+            var form = new WWWForm();
+            form.AddBinaryData("file", payload, source + ".bin", contentType);
+            using var request = UnityWebRequest.Post(ResolveUrl(path), form);
+            if (source == "face" && !string.IsNullOrWhiteSpace(faceSessionId))
             {
-                var form = new WWWForm();
-                form.AddBinaryData("file", payload, source + ".bin", contentType);
-                using var request = UnityWebRequest.Post(ResolveUrl(path), form);
-                if (source == "face" && !string.IsNullOrWhiteSpace(faceSessionId))
-                {
-                    request.SetRequestHeader("X-SRTP-Emotion-Session", faceSessionId);
-                }
-                return await SendRequestAsync(request, source, cancellationToken);
+                request.SetRequestHeader("X-SRTP-Emotion-Session", faceSessionId);
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return UserEmo.Failure(source, $"情绪服务不可用：{ex.Message}");
-            }
+
+            return await SendRequestAsync(request, source, cancellationToken);
         }
 
         private async Task<UserEmo> SendJsonAsync(string path, string json, string source, CancellationToken cancellationToken)
         {
-            try
-            {
-                using var request = new UnityWebRequest(ResolveUrl(path), UnityWebRequest.kHttpVerbPOST);
-                request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
-                request.downloadHandler = new DownloadHandlerBuffer();
-                request.SetRequestHeader("Content-Type", "application/json");
-                return await SendRequestAsync(request, source, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                return UserEmo.Failure(source, $"情绪服务不可用：{ex.Message}");
-            }
+            using var request = new UnityWebRequest(ResolveUrl(path), UnityWebRequest.kHttpVerbPOST);
+            request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json));
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+            return await SendRequestAsync(request, source, cancellationToken);
         }
 
         private async Task<UserEmo> SendRequestAsync(UnityWebRequest request, string source, CancellationToken cancellationToken)
@@ -159,13 +143,18 @@ namespace SrtpAvatar
 
         private string ResolveUrl(string path)
         {
-            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+            return baseUrl + path;
+        }
+
+        private static string NormalizeBaseUrl(string value)
+        {
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
                 || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             {
-                throw new InvalidOperationException("Emotion Service Base Url 必须是有效 HTTP 地址。");
+                throw new ArgumentException("Emotion Service Base Url 必须是有效 HTTP 地址。", nameof(value));
             }
 
-            return uri.GetLeftPart(UriPartial.Path).TrimEnd('/') + path;
+            return uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
         }
 
         [Serializable]

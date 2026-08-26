@@ -18,7 +18,7 @@ namespace SrtpAvatar
             this.microphonePermission = microphonePermission;
         }
 
-        public bool CanRecognize => config != null && config.preferAndroidNativeSpeech && androidSpeech != null && androidSpeech.CanRecognize;
+        public bool CanRecognize => config.preferAndroidNativeSpeech && androidSpeech.CanRecognize;
 
         public async Task<string> ListenForUserTextAsync(Action<string> reportSubtitle, CancellationToken cancellationToken)
         {
@@ -36,7 +36,7 @@ namespace SrtpAvatar
                 string text;
                 try
                 {
-                    text = await TaskTimeout.WithTimeout(androidSpeech.RecognizeAsync(config.speechLanguage), timeout, "系统语音识别超时。", androidSpeech.CancelRecognition, cancellationToken);
+                    text = await TaskTimeout.WithTimeout(androidSpeech.RecognizeAsync(config.speechLanguage, config.preferOnDeviceSpeechRecognition), timeout, "系统语音识别超时。", androidSpeech.CancelRecognition, cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -44,29 +44,22 @@ namespace SrtpAvatar
                 }
                 catch (Exception ex)
                 {
-                    throw new AppException(AppErr.speech, "系统语音识别失败。", ex);
+                    var message = string.IsNullOrWhiteSpace(ex.Message) ? "系统语音识别失败。" : ex.Message;
+                    throw new AppException(AppErr.speech, message, ex);
                 }
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    var trimmed = text.Trim();
-                    reportSubtitle?.Invoke($"你：{trimmed}");
-                    return trimmed;
+                    return text.Trim();
                 }
             }
 
-            if (config == null || config.useLocalDemoWhenDeepSeekKeyMissing || Application.isEditor)
-            {
-                var demoText = LocalDemoDialogue.UserText(config);
-                reportSubtitle?.Invoke($"你：{demoText}");
-                return demoText;
-            }
 
             throw new AppException(AppErr.speech, "当前设备没有可用的系统语音识别服务。");
         }
 
         public void Cancel()
         {
-            androidSpeech?.CancelRecognition();
+            androidSpeech.CancelRecognition();
         }
 
         private static string PermissionMessage(PermState state)

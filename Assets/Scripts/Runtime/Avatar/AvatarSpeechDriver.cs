@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,28 +16,38 @@ namespace SrtpAvatar
 
         public void Bind(DigitalHumanAvatarBase driver, AudioSource source)
         {
+            if (driver == null)
+            {
+                throw new ArgumentNullException(nameof(driver), "Avatar driver is required.");
+            }
+
+            if (source == null)
+            {
+                throw new ArgumentNullException(nameof(source), "Audio source is required.");
+            }
+
             avatarDriver = driver;
             audioSource = source;
         }
 
         public void SetEmotion(AvatarEmotion emotion)
         {
-            avatarDriver?.SetEmotion(emotion);
+            avatarDriver.SetEmotion(emotion);
         }
 
         public void PlayGesture(AvatarGesture gesture)
         {
-            avatarDriver?.PlayGesture(gesture);
+            avatarDriver.PlayGesture(gesture);
         }
 
         public void SetState(AvatarState state)
         {
-            avatarDriver?.SetState(state);
+            avatarDriver.SetState(state);
         }
 
         public void SetSpeechLevel(float level)
         {
-            avatarDriver?.SetSpeechLevel(level);
+            avatarDriver.SetSpeechLevel(level);
         }
 
         public void StartNativeSpeechMouth()
@@ -60,13 +71,7 @@ namespace SrtpAvatar
 
         public async Task PlayFallbackToneAsync(string reply, CancellationToken cancellationToken = default)
         {
-            if (audioSource == null)
-            {
-                SetSpeechLevel(0f);
-                return;
-            }
-
-            var duration = Mathf.Clamp((reply ?? "").Length * 0.055f, 1.2f, 4.5f);
+            var duration = Mathf.Clamp(reply.Length * 0.055f, 1.2f, 4.5f);
             var clip = AudioFallback.CreatePromptTone(duration);
             audioSource.clip = clip;
             audioSource.Play();
@@ -89,16 +94,13 @@ namespace SrtpAvatar
         public void StopAll()
         {
             StopNativeSpeechMouth();
-            if (audioSource != null)
-            {
-                audioSource.Stop();
-            }
+            audioSource.Stop();
         }
 
         private IEnumerator DriveMouthFromAudio()
         {
             var samples = new float[128];
-            while (audioSource != null && audioSource.isPlaying)
+            while (audioSource.isPlaying)
             {
                 audioSource.GetOutputData(samples, 0);
                 var sum = 0f;

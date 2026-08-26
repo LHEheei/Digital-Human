@@ -54,13 +54,13 @@ namespace SrtpAvatar
                 messages.Add(new ChatMessage { role = "system", content = recentContext });
             }
 
-            var emotionContext = input == null ? "" : input.BuildEmotionContext();
+            var emotionContext = input.BuildEmotionContext();
             if (!string.IsNullOrWhiteSpace(emotionContext))
             {
                 messages.Add(new ChatMessage { role = "system", content = emotionContext });
             }
 
-            var userText = input == null ? "" : input.text;
+            var userText = input.text;
             messages.Add(new ChatMessage { role = "user", content = string.IsNullOrWhiteSpace(userText) ? "你好" : userText.Trim() });
 
             var requestBody = new ChatCompletionRequest
@@ -98,7 +98,7 @@ namespace SrtpAvatar
 
         private int ResolveTimeoutSeconds()
         {
-            return config == null ? 25 : Mathf.Clamp(config.deepSeekRequestTimeoutSeconds, 5, 60);
+            return Mathf.Clamp(config.deepSeekRequestTimeoutSeconds, 5, 60);
         }
 
         private static string ExtractFirstResponseContent(ChatCompletionResponse response)

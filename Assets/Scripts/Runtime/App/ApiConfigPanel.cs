@@ -188,7 +188,7 @@ namespace SrtpAvatar
 
             RuntimeSecrets.SaveDeepSeekSettings(safeBaseUrl, key, model);
             apiKeyInput.text = "";
-            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时会继续使用演示模式。" : "已保存 API 配置，重新点击 MIC 即可使用。";
+            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时无法开始 AI 对话。" : "已保存 API 配置，重新点击 MIC 即可使用。";
             SetFeedback(string.IsNullOrWhiteSpace(warning) ? saved : $"{saved}\n警告：{warning}");
         }
 
@@ -196,7 +196,7 @@ namespace SrtpAvatar
         {
             RuntimeSecrets.ClearDeepSeekSettings();
             RefreshFields();
-            SetFeedback("已清除本机 API 配置，当前会回到演示模式或 Inspector 配置。");
+            SetFeedback("已清除本机 API 配置，AI 对话当前不可用。");
         }
 
         private void RefreshFields()
@@ -221,7 +221,7 @@ namespace SrtpAvatar
             }
 
             SetFeedback(string.IsNullOrWhiteSpace(RuntimeSecrets.ResolveDeepSeekApiKey(config))
-                ? "当前未检测到 Key，点击 MIC 会使用演示模式。"
+                ? "当前未检测到 Key，请填写并保存后使用 AI 对话。"
                 : "当前已检测到 Key，可直接测试真实对话。");
         }
 

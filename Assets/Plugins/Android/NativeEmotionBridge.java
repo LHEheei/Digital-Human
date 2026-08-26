@@ -39,6 +39,11 @@ public final class NativeEmotionBridge {
     private static final String[] PROJECT_LABELS = {
         "joy", "angry", "sorrow", "surprised", "neutral"
     };
+    // HSEmotion output order: anger, contempt, disgust, fear, happiness,
+    // neutral, sadness, surprise. Unsupported classes are intentionally
+    // excluded instead of being accumulated into neutral, which previously
+    // gave neutral an artificial four-class advantage.
+    private static final int[] PROJECT_MODEL_INDICES = {4, 0, 6, 7, 5};
     private static final float[] IMAGE_MEAN = {0.485f, 0.456f, 0.406f};
     private static final float[] IMAGE_STD = {0.229f, 0.224f, 0.225f};
 
@@ -184,14 +189,7 @@ public final class NativeEmotionBridge {
 
     private JSONObject buildResult(Bitmap source, Face face) throws Exception {
         float[] logits = runModel(cropAndPrepare(source, face.getBoundingBox()));
-        float[] modelProbabilities = softmax(logits);
-        float[] projected = new float[PROJECT_LABELS.length];
-        projected[1] = modelProbabilities[0];
-        projected[4] = modelProbabilities[1] + modelProbabilities[2]
-            + modelProbabilities[3] + modelProbabilities[5];
-        projected[0] = modelProbabilities[4];
-        projected[2] = modelProbabilities[6];
-        projected[3] = modelProbabilities[7];
+        float[] projected = projectSupportedEmotions(logits);
 
         int bestIndex = 0;
         for (int index = 1; index < projected.length; index++) {
@@ -212,6 +210,18 @@ public final class NativeEmotionBridge {
         result.put("capturedAtUnixMs", System.currentTimeMillis());
         result.put("scores", scores);
         return result;
+    }
+
+    private float[] projectSupportedEmotions(float[] modelLogits) {
+        if (modelLogits == null || modelLogits.length != 8) {
+            throw new IllegalArgumentException("模型类别数量不正确");
+        }
+
+        float[] supportedLogits = new float[PROJECT_MODEL_INDICES.length];
+        for (int index = 0; index < PROJECT_MODEL_INDICES.length; index++) {
+            supportedLogits[index] = modelLogits[PROJECT_MODEL_INDICES[index]];
+        }
+        return softmax(supportedLogits);
     }
 
     private float[] cropAndPrepare(Bitmap source, Rect detectedBounds) {

@@ -262,7 +262,6 @@ namespace SrtpAvatarEditor
                 var status = canvas.transform.Find("Status") as RectTransform;
                 var subtitle = canvas.transform.Find("Subtitle") as RectTransform;
                 var hint = canvas.transform.Find("Hint") as RectTransform;
-                var mic = canvas.transform.Find("Microphone Button") as RectTransform;
 
                 if (status != null)
                 {
@@ -296,21 +295,28 @@ namespace SrtpAvatarEditor
                         text.color = new Color(0.16f, 0.36f, 0.48f, 0.72f);
                     }
                 }
-
-                if (mic != null)
-                {
-                    mic.pivot = new Vector2(1f, 0f);
-                    SetRect(mic, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-42f, 44f), new Vector2(116f, 116f));
-                    var image = mic.GetComponent<Image>();
-                    if (image != null)
-                    {
-                        image.color = new Color(0.08f, 0.58f, 0.68f, 0.9f);
-                    }
-                }
             }
 
             EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
             Debug.Log("Applied soft blue presentation look.");
+        }
+
+        [MenuItem("SRTP/Remove Manual Speech UI")]
+        public static void RemoveManualSpeechUi()
+        {
+            var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            var canvas = GameObject.Find("Canvas");
+            var microphone = canvas == null ? null : canvas.transform.Find("Microphone Button");
+            if (microphone == null)
+            {
+                Debug.Log("Manual speech UI is already absent from the demo scene.");
+                return;
+            }
+
+            Object.DestroyImmediate(microphone.gameObject);
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            Debug.Log("Removed the manual speech button from the demo scene.");
         }
 
         private static void CreateEnvironment()
@@ -361,27 +367,13 @@ namespace SrtpAvatarEditor
             var status = CreateText("Status", canvasObject.transform, "\u7a7a\u95f2", 44, TextAnchor.MiddleCenter, new Color(0.06f, 0.22f, 0.36f));
             SetRect(status.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -96f), new Vector2(420f, 82f));
 
-            var subtitle = CreateText("Subtitle", canvasObject.transform, "\u70b9\u51fb\u9ea6\u514b\u98ce\u5f00\u59cb\u5bf9\u8bdd", 30, TextAnchor.MiddleCenter, new Color(0.08f, 0.18f, 0.28f));
+            var subtitle = CreateText("Subtitle", canvasObject.transform, "\u6b63\u5728\u542f\u52a8\u81ea\u52a8\u8bed\u97f3\u5bf9\u8bdd...", 30, TextAnchor.MiddleCenter, new Color(0.08f, 0.18f, 0.28f));
             SetRect(subtitle.rectTransform, new Vector2(0.08f, 1f), new Vector2(0.92f, 1f), new Vector2(0f, -172f), new Vector2(0f, 108f));
 
             var hint = CreateText("Hint", canvasObject.transform, "\u6f14\u793a\u6a21\u5f0f", 18, TextAnchor.MiddleRight, new Color(0.16f, 0.36f, 0.48f, 0.72f));
             SetRect(hint.rectTransform, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-214f, 56f), new Vector2(390f, 52f));
-
-            var buttonObject = new GameObject("Microphone Button");
-            buttonObject.transform.SetParent(canvasObject.transform, false);
-            var buttonImage = buttonObject.AddComponent<Image>();
-            buttonImage.color = new Color(0.08f, 0.57f, 0.66f, 0.92f);
-            var button = buttonObject.AddComponent<Button>();
-            var buttonRect = buttonObject.GetComponent<RectTransform>();
-            buttonRect.pivot = new Vector2(1f, 0f);
-            SetRect(buttonRect, new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-42f, 44f), new Vector2(116f, 116f));
-
-            var buttonLabel = CreateText("Mic Label", buttonObject.transform, "MIC", 24, TextAnchor.MiddleCenter, Color.white);
-            SetRect(buttonLabel.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-
             return new UiRefs
             {
-                microphoneButton = button,
                 statusText = status,
                 subtitleText = subtitle,
                 hintText = hint
@@ -416,7 +408,6 @@ namespace SrtpAvatarEditor
             serialized.FindProperty("avatarDriver").objectReferenceValue = avatarDriver;
             serialized.FindProperty("androidSpeech").objectReferenceValue = androidSpeech;
             serialized.FindProperty("audioSource").objectReferenceValue = audioSource;
-            serialized.FindProperty("microphoneButton").objectReferenceValue = ui.microphoneButton;
             serialized.FindProperty("statusText").objectReferenceValue = ui.statusText;
             serialized.FindProperty("subtitleText").objectReferenceValue = ui.subtitleText;
             serialized.FindProperty("hintText").objectReferenceValue = ui.hintText;
@@ -446,7 +437,6 @@ namespace SrtpAvatarEditor
 
             return new UiRefs
             {
-                microphoneButton = canvas.transform.Find("Microphone Button")?.GetComponent<Button>(),
                 hintText = canvas.transform.Find("Hint")?.GetComponent<Text>()
             };
         }
@@ -460,7 +450,6 @@ namespace SrtpAvatarEditor
 
             var serialized = new SerializedObject(layout);
             serialized.FindProperty("targetCamera").objectReferenceValue = Camera.main;
-            serialized.FindProperty("microphoneButton").objectReferenceValue = ui.microphoneButton == null ? null : ui.microphoneButton.GetComponent<RectTransform>();
             serialized.FindProperty("hintText").objectReferenceValue = ui.hintText == null ? null : ui.hintText.GetComponent<RectTransform>();
             serialized.ApplyModifiedPropertiesWithoutUndo();
         }
@@ -526,7 +515,6 @@ namespace SrtpAvatarEditor
 
         private sealed class UiRefs
         {
-            public Button microphoneButton;
             public Text statusText;
             public Text subtitleText;
             public Text hintText;

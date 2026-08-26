@@ -18,10 +18,11 @@ namespace SrtpAvatar
 
 #if UNITY_ANDROID && !UNITY_EDITOR
         private AndroidJavaObject bridge;
+        private AndroidJavaObject voiceBridge;
 #endif
 
         public bool SupportsFaceCapture => true;
-        public bool SupportsVoiceCapture => false;
+        public bool SupportsVoiceCapture => true;
 
         public Task<UserEmo> GetFaceAsync(byte[] image, CancellationToken cancellationToken)
         {
@@ -57,8 +58,34 @@ namespace SrtpAvatar
 
         public Task<UserEmo> GetVoiceAsync(byte[] audio, CancellationToken cancellationToken)
         {
+            if (audio == null || audio.Length == 0)
+            {
+                return Task.FromResult(UserEmo.Failure("voice", "没有可供手机端分析的语音。"));
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(UserEmo.Failure("voice", "当前独立版尚未内置端侧声学情绪模型。"));
+#if UNITY_ANDROID && !UNITY_EDITOR
+            try
+            {
+                EnsureBridge();
+                if (voiceBridge == null)
+                {
+                    return Task.FromResult(UserEmo.Failure("voice", "手机端语音情绪组件不可用。"));
+                }
+
+                var requestId = Guid.NewGuid().ToString("N");
+                var completion = new TaskCompletionSource<UserEmo>();
+                pendingRequests[requestId] = completion;
+                voiceBridge.Call("analyzeVoice", requestId, Convert.ToBase64String(audio));
+                return completion.Task;
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult(UserEmo.Failure("voice", "手机端语音情绪分析启动失败：" + ex.Message));
+            }
+#else
+            return Task.FromResult(UserEmo.Failure("voice", "手机端语音情绪分析仅支持 Android 真机。"));
+#endif
         }
 
         public Task<UserEmo> GetFusionAsync(UserEmo face, UserEmo voice, CancellationToken cancellationToken)
@@ -96,6 +123,34 @@ namespace SrtpAvatar
             completion.TrySetResult(UserEmo.Failure("face", string.IsNullOrWhiteSpace(message) ? "手机端人脸分析失败。" : message));
         }
 
+        public void OnNativeVoiceResult(string callback)
+        {
+            if (!TryReadCallback(callback, out var requestId, out var payload) || !pendingRequests.TryGetValue(requestId, out var completion))
+            {
+                return;
+            }
+
+            pendingRequests.Remove(requestId);
+            if (HttpEmoService.TryParseResult(payload, "voice", out var result))
+            {
+                completion.TrySetResult(result);
+            }
+            else
+            {
+                completion.TrySetResult(UserEmo.Failure("voice", "手机端语音情绪分析返回无效结果。"));
+            }
+        }
+
+        public void OnNativeVoiceError(string callback)
+        {
+            if (!TryReadCallback(callback, out var requestId, out var message) || !pendingRequests.TryGetValue(requestId, out var completion))
+            {
+                return;
+            }
+
+            pendingRequests.Remove(requestId);
+            completion.TrySetResult(UserEmo.Failure("voice", string.IsNullOrWhiteSpace(message) ? "手机端语音情绪分析失败。" : message));
+        }
         private void OnDestroy()
         {
             foreach (var pending in pendingRequests.Values)
@@ -110,6 +165,13 @@ namespace SrtpAvatar
                 bridge.Call("shutdown");
                 bridge.Dispose();
                 bridge = null;
+            }
+
+            if (voiceBridge != null)
+            {
+                voiceBridge.Call("shutdown");
+                voiceBridge.Dispose();
+                voiceBridge = null;
             }
 #endif
         }
@@ -168,6 +230,10 @@ namespace SrtpAvatar
                     activity,
                     gameObject.name,
                     signedModelBytes);
+                voiceBridge = new AndroidJavaObject(
+                    "com.srtp.avatar.NativeVoiceEmotionBridge",
+                    activity,
+                    gameObject.name);
             }
             finally
             {

@@ -16,7 +16,7 @@ namespace SrtpAvatar
             this.androidSpeech = androidSpeech;
         }
 
-        public bool CanSpeak => config != null && config.preferAndroidNativeSpeech && androidSpeech != null && androidSpeech.CanSpeak;
+        public bool CanSpeak => config.preferAndroidNativeSpeech && androidSpeech.CanSpeak;
 
         public async Task SpeakAsync(string reply, CancellationToken cancellationToken)
         {
@@ -42,13 +42,13 @@ namespace SrtpAvatar
 
         public void Stop()
         {
-            androidSpeech?.StopSpeaking();
+            androidSpeech.StopSpeaking();
         }
 
         private float ResolveTtsTimeout(string reply)
         {
-            var baseSeconds = config == null ? 5f : Mathf.Max(3f, config.ttsBaseTimeoutSeconds);
-            var secondsPerCharacter = config == null ? 0.25f : Mathf.Max(0.05f, config.ttsSecondsPerCharacter);
+            var baseSeconds = Mathf.Max(3f, config.ttsBaseTimeoutSeconds);
+            var secondsPerCharacter = Mathf.Max(0.05f, config.ttsSecondsPerCharacter);
             return Mathf.Clamp((reply ?? "").Length * secondsPerCharacter + baseSeconds, 8f, 30f);
         }
     }

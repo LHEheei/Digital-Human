@@ -9,6 +9,16 @@ namespace SrtpAvatar
     {
         public SpeechService(AppConfig config, AndroidNativeSpeechBridge androidSpeech)
         {
+            if (config == null)
+            {
+                throw new ArgumentNullException(nameof(config));
+            }
+
+            if (androidSpeech == null)
+            {
+                throw new ArgumentNullException(nameof(androidSpeech));
+            }
+
             Input = new SpeechInputService(config, androidSpeech, new MicrophonePermissionService());
             Output = new SpeechOutputService(config, androidSpeech);
         }

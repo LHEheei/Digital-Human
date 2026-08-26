@@ -19,6 +19,8 @@ namespace SrtpAvatar
 
         [Header("Android Native Speech")]
         public bool preferAndroidNativeSpeech = true;
+        [Tooltip("优先使用 Android 设备端语音识别；不可用时自动回退到系统语音服务。")]
+        public bool preferOnDeviceSpeechRecognition = true;
         public string speechLanguage = "zh-CN";
         public float speechRecognitionTimeoutSeconds = 20f;
         [Tooltip("在前台空闲时自动开启系统语音识别；数字人播报期间会暂停，避免识别到自身语音。")]
@@ -38,6 +40,8 @@ namespace SrtpAvatar
         public float emotionVoiceWindowSeconds = 4f;
         public bool preferFrontEmotionCamera = true;
         public bool showEmotionCameraPreview = false;
+        [Tooltip("显示仅用于研发采样的情绪评测面板；评测数据不包含图像或音频。")]
+        public bool enableEmotionEvaluationPanel = false;
 
         [Header("Car Communication")]
         public bool enableCarCommunication = false;
@@ -55,17 +59,10 @@ namespace SrtpAvatar
         public string carCommandSlowDown = "D";
         public string carBluetoothCommandSuffix = "\\n";
 
-        [Header("Demo Mode")]
-        public bool useLocalDemoWhenDeepSeekKeyMissing = true;
-        public string localDemoUserText = "你好，请介绍一下你现在能做什么。";
 
         public bool HasDeepSeekKey => !string.IsNullOrWhiteSpace(RuntimeSecrets.ResolveDeepSeekApiKey(this));
 
-        public string DeepSeekUrl(string path)
-        {
-            var root = RuntimeSecrets.ResolveDeepSeekBaseUrl(this).TrimEnd('/');
-            return $"{root}/{path.TrimStart('/')}";
-        }
+
     }
 
     public enum EmotionRuntimeMode

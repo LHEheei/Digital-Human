@@ -5,16 +5,17 @@ using UnityEngine;
 namespace SrtpAvatar
 {
     /// <summary>
-    /// Smooths on-device one-frame model distributions. Ambiguous or short
-    /// transients become a conservative neutral cue instead of driving the
-    /// avatar immediately.
+    /// Smooths on-device one-frame model distributions without hiding a clear
+    /// expression behind an artificial warm-up period. Strong current signals
+    /// pass immediately; only genuinely ambiguous distributions become neutral.
     /// </summary>
     public sealed class FaceEmotionTemporalFilter
     {
-        private const int WindowSize = 5;
-        private const int MinimumSamplesForNonNeutral = 3;
-        private const float MinimumCandidateScore = 0.45f;
-        private const float MinimumCandidateMargin = 0.10f;
+        private const int WindowSize = 3;
+        private const float MinimumCandidateScore = 0.40f;
+        private const float MinimumCandidateMargin = 0.08f;
+        private const float StrongSignalScore = 0.65f;
+        private const float StrongSignalMargin = 0.15f;
         private static readonly string[] Labels = { "joy", "angry", "sorrow", "surprised", "neutral" };
         private readonly Queue<float[]> samples = new Queue<float[]>(WindowSize);
 
@@ -25,40 +26,26 @@ namespace SrtpAvatar
                 return sample ?? UserEmo.Failure("face", "手机端表情结果为空。");
             }
 
-            samples.Enqueue(ToDistribution(sample));
+            var current = ToDistribution(sample);
+            samples.Enqueue(current);
             while (samples.Count > WindowSize)
             {
                 samples.Dequeue();
             }
 
             var averaged = WeightedAverage(samples);
-            var best = 0;
-            var second = 1;
-            if (averaged[second] > averaged[best])
-            {
-                (best, second) = (second, best);
-            }
-
-            for (var index = 2; index < averaged.Length; index++)
-            {
-                if (averaged[index] > averaged[best])
-                {
-                    second = best;
-                    best = index;
-                }
-                else if (averaged[index] > averaged[second])
-                {
-                    second = index;
-                }
-            }
+            FindTopTwo(current, out var currentBest, out var currentSecond);
+            var currentIsStrong = current[currentBest] >= StrongSignalScore
+                && current[currentBest] - current[currentSecond] >= StrongSignalMargin;
+            var decision = currentIsStrong ? current : averaged;
+            FindTopTwo(decision, out var best, out var second);
 
             var candidate = Labels[best];
-            var margin = averaged[best] - averaged[second];
-            var ambiguous = averaged[best] < MinimumCandidateScore || margin < MinimumCandidateMargin;
-            var insufficientHistory = candidate != "neutral" && samples.Count < MinimumSamplesForNonNeutral;
-            var outputLabel = ambiguous || insufficientHistory ? "neutral" : candidate;
+            var margin = decision[best] - decision[second];
+            var ambiguous = decision[best] < MinimumCandidateScore || margin < MinimumCandidateMargin;
+            var outputLabel = ambiguous ? "neutral" : candidate;
             var outputScore = outputLabel == candidate
-                ? Mathf.Min(0.90f, averaged[best])
+                ? Mathf.Min(0.95f, decision[best])
                 : 0.65f;
 
             var scores = new EmotionScore[Labels.Length];
@@ -75,6 +62,29 @@ namespace SrtpAvatar
                 capturedAtUnixMs = sample.capturedAtUnixMs,
                 scores = scores
             }.Normalize();
+        }
+
+        private static void FindTopTwo(float[] values, out int best, out int second)
+        {
+            best = 0;
+            second = 1;
+            if (values[second] > values[best])
+            {
+                (best, second) = (second, best);
+            }
+
+            for (var index = 2; index < values.Length; index++)
+            {
+                if (values[index] > values[best])
+                {
+                    second = best;
+                    best = index;
+                }
+                else if (values[index] > values[second])
+                {
+                    second = index;
+                }
+            }
         }
 
         private static float[] ToDistribution(UserEmo sample)

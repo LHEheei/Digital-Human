@@ -14,7 +14,7 @@ namespace SrtpAvatar
 
         public CarCommunicationService(AppConfig config, AndroidBluetoothCarBridge bluetoothBridge)
         {
-            this.config = config;
+            this.config = config ?? throw new ArgumentNullException(nameof(config));
             this.bluetoothBridge = bluetoothBridge;
         }
 
@@ -30,7 +30,7 @@ namespace SrtpAvatar
                 return CarCommunicationResult.Hidden();
             }
 
-            if (config == null || !config.enableCarCommunication || config.carCommunicationMode == CarCommunicationMode.Disabled)
+            if (!config.enableCarCommunication || config.carCommunicationMode == CarCommunicationMode.Disabled)
             {
                 return CarCommunicationResult.Visible($"小车指令已识别：{command.Intent}，通讯未启用。");
             }
@@ -91,7 +91,7 @@ namespace SrtpAvatar
 
         private int ResolveTimeoutSeconds()
         {
-            return config == null ? 8 : Mathf.Clamp(config.carCommunicationTimeoutSeconds, 2, 30);
+            return Mathf.Clamp(config.carCommunicationTimeoutSeconds, 2, 30);
         }
 
         public void CancelPendingCommand()

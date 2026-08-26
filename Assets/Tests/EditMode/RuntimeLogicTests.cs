@@ -94,6 +94,40 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void CoreServices_RejectMissingConfiguration()
+        {
+            Assert.Throws<ArgumentNullException>(() => new DialogueService(null));
+            Assert.Throws<ArgumentNullException>(() => new SpeechService(null, null));
+            Assert.Throws<ArgumentNullException>(() => new CarCommunicationService(null, null));
+            Assert.Throws<ArgumentNullException>(() => new HttpEmoService(null));
+        }
+
+        [TestCase("http://127.0.0.1:8000", false)]
+        [TestCase("https://example.test/api/", false)]
+        [TestCase("", true)]
+        [TestCase("not a url", true)]
+        public void HttpEmoService_ValidatesBaseUrlAtConstruction(string source, bool invalid)
+        {
+            var config = ScriptableObject.CreateInstance<AppConfig>();
+            try
+            {
+                config.emotionServiceBaseUrl = source;
+                if (invalid)
+                {
+                    Assert.Throws<ArgumentException>(() => new HttpEmoService(config));
+                }
+                else
+                {
+                    Assert.DoesNotThrow(() => new HttpEmoService(config));
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(config);
+            }
+        }
+
+        [Test]
         public void LongTermMemoryStore_RefreshesDuplicateBeforeTrimming()
         {
             memoryFilePath = Path.Combine(Path.GetTempPath(), "srtp-memory-" + Guid.NewGuid().ToString("N") + ".json");
@@ -356,17 +390,28 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
-        public void FaceEmotionTemporalFilter_RequiresThreeFramesBeforeNonNeutralOutput()
+        public void FaceEmotionTemporalFilter_PassesStrongNonNeutralSignalImmediately()
         {
             var filter = new FaceEmotionTemporalFilter();
 
-            Assert.AreEqual("neutral", filter.Observe(FaceSample("joy", .78f, .12f, 1)).label);
-            Assert.AreEqual("neutral", filter.Observe(FaceSample("joy", .80f, .10f, 2)).label);
-            var stable = filter.Observe(FaceSample("joy", .82f, .08f, 3));
+            var stable = filter.Observe(FaceSample("joy", .78f, .12f, 1));
 
             Assert.AreEqual("joy", stable.label);
-            Assert.Greater(stable.score, .75f);
-            Assert.AreEqual(3, stable.capturedAtUnixMs);
+            Assert.Greater(stable.score, .70f);
+            Assert.AreEqual(1, stable.capturedAtUnixMs);
+        }
+
+        [Test]
+        public void FaceEmotionTemporalFilter_StrongNewSignalIsNotHiddenByPreviousLabel()
+        {
+            var filter = new FaceEmotionTemporalFilter();
+            Assert.AreEqual("neutral", filter.Observe(FaceSample("neutral", .85f, .85f, 1)).label);
+
+            var changed = filter.Observe(FaceSample("angry", .78f, .10f, 2));
+
+            Assert.AreEqual("angry", changed.label);
+            Assert.Greater(changed.score, .70f);
+            Assert.AreEqual(2, changed.capturedAtUnixMs);
         }
 
         [Test]
@@ -394,6 +439,55 @@ namespace SrtpAvatar.Tests
             Assert.NotNull(result);
             Assert.AreEqual("neutral", result.label);
             Assert.AreEqual(.65f, result.score);
+        }
+
+        [Test]
+        public void EmotionEvaluationSession_CollectsOnlyAfterLabelSelectionAndStopsAtTarget()
+        {
+            var session = new EmotionEvaluationSession(2);
+            var raw = FaceSample("joy", .8f, .1f, 1000);
+            var stabilized = FaceSample("joy", .75f, .15f, 1000);
+
+            Assert.IsFalse(session.Observe(raw, stabilized));
+            Assert.IsTrue(session.Start("joy"));
+            Assert.IsTrue(session.Observe(raw, stabilized));
+            Assert.IsTrue(session.IsCollecting);
+            Assert.IsTrue(session.Observe(raw, stabilized));
+            Assert.IsFalse(session.IsCollecting);
+            Assert.AreEqual(2, session.Count("joy"));
+            Assert.IsFalse(session.Observe(raw, stabilized));
+        }
+
+        [Test]
+        public void EmotionEvaluationSession_RecordsRawDistributionAndFinalDecisionInCsv()
+        {
+            var session = new EmotionEvaluationSession(1);
+            var raw = FaceSample("joy", .8f, .1f, 1000);
+            var stabilized = FaceSample("neutral", .65f, .65f, 1000);
+
+            Assert.IsTrue(session.Start("sorrow"));
+            Assert.IsTrue(session.Observe(raw, stabilized));
+            var csv = session.ToCsv();
+
+            StringAssert.Contains("intended_label,raw_label,raw_score,joy_score", csv);
+            StringAssert.Contains("sorrow,joy,0.800000,0.800000", csv);
+            StringAssert.Contains("neutral,0.650000,1000", csv);
+            StringAssert.DoesNotContain("image", csv.ToLowerInvariant());
+            StringAssert.DoesNotContain("audio", csv.ToLowerInvariant());
+        }
+
+        [Test]
+        public void EmotionEvaluationSession_RejectsUnknownLabelAndClearRemovesRecords()
+        {
+            var session = new EmotionEvaluationSession(1);
+            Assert.IsFalse(session.Start("happy"));
+            Assert.IsTrue(session.Start("neutral"));
+            Assert.IsTrue(session.Observe(FaceSample("neutral", .9f, .9f, 1), FaceSample("neutral", .9f, .9f, 1)));
+
+            session.Clear();
+
+            Assert.AreEqual(0, session.Records.Count);
+            Assert.IsFalse(session.IsCollecting);
         }
 
         [Test]
@@ -440,6 +534,13 @@ namespace SrtpAvatar.Tests
             Assert.IsFalse(AutoConversationPolicy.ShouldQuietlyRetry("系统语音识别网络失败。"));
             Assert.AreEqual(1.2f, AutoConversationPolicy.NormalizeRetryDelay(0f));
             Assert.AreEqual(.25f, AutoConversationPolicy.NormalizeRetryDelay(.1f));
+        }
+
+        [Test]
+        public void AutoConversationPolicy_FormatsImmediateQuestionAndReplyWithoutConfirmation()
+        {
+            Assert.AreEqual("你：今天怎么样？\n\n她：我在这里，想听你说。", AutoConversationPolicy.FormatTurn(" 今天怎么样？ ", " 我在这里，想听你说。 "));
+            Assert.AreEqual("你：（未识别到语音）\n\n她：（暂无回复）", AutoConversationPolicy.FormatTurn(" ", " "));
         }
 
         private static UserEmo FaceSample(string label, float labelScore, float neutralScore, long capturedAt)

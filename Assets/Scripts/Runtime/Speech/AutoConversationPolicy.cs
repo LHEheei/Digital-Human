@@ -15,6 +15,13 @@ namespace SrtpAvatar
             return !string.IsNullOrWhiteSpace(text);
         }
 
+        public static string FormatTurn(string userText, string assistantText)
+        {
+            var user = string.IsNullOrWhiteSpace(userText) ? "（未识别到语音）" : userText.Trim();
+            var assistant = string.IsNullOrWhiteSpace(assistantText) ? "（暂无回复）" : assistantText.Trim();
+            return $"你：{user}\n\n她：{assistant}";
+        }
+
         public static float NormalizeRetryDelay(float seconds)
         {
             return Math.Max(0.25f, seconds <= 0f ? DefaultRetryDelaySeconds : seconds);
