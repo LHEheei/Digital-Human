@@ -8,6 +8,7 @@ namespace SrtpAvatar
 {
     public sealed class DigitalHumanAppController : MonoBehaviour
     {
+        private const int VoiceEmotionResponseBudgetMilliseconds = 500;
         [Header("Config")]
         [SerializeField] private AppConfig config;
 
@@ -78,26 +79,26 @@ namespace SrtpAvatar
             try
             {
                 SetState(AvatarState.listening, "倾听");
-                SetSubtitle("正在聆听，直接说话即可开始对话");
-                SetHint("自动语音交互已开启；直接说话即可。回复时会暂停聆听。");
+                SetSubtitle("正在准备语音服务...");
+                SetHint("自动语音交互已开启；显示“正在聆听”后即可直接说话。回复时会暂停聆听。");
 
                 emotionPerception?.SuspendAudioCapture();
-                string userText;
+                SpeechRecognitionTurn userTurn;
                 try
                 {
-                    userText = await speechService.ListenForUserTextAsync(SetSubtitle, cancellation.Token);
+                    userTurn = await speechService.ListenForUserTurnAsync(SetSubtitle, cancellation.Token);
                 }
                 finally
                 {
                     emotionPerception?.ResumeAudioCapture();
                 }
 
-                if (cancellation.IsCancellationRequested || generation != autoListeningGeneration || !AutoConversationPolicy.HasUsableText(userText))
+                if (cancellation.IsCancellationRequested || generation != autoListeningGeneration || userTurn == null || !AutoConversationPolicy.HasUsableText(userTurn.Text))
                 {
                     return;
                 }
 
-                await RunConversationFromCapturedTextAsync(userText);
+                await RunConversationFromCapturedTurnAsync(userTurn);
             }
             catch (OperationCanceledException)
             {
@@ -143,16 +144,25 @@ namespace SrtpAvatar
             }
         }
 
-        private async Task RunConversationFromCapturedTextAsync(string userText)
+        private async Task RunConversationFromCapturedTurnAsync(SpeechRecognitionTurn userTurn)
         {
-            if (!AutoConversationPolicy.HasUsableText(userText) || !TryBeginConversation(out var cancellationToken))
+            if (userTurn == null || !AutoConversationPolicy.HasUsableText(userTurn.Text) || !TryBeginConversation(out var cancellationToken))
             {
                 return;
             }
 
             try
             {
-                await RespondToUserTextAsync(userText.Trim(), cancellationToken);
+                if (emotionPerception != null && userTurn.HasAudio)
+                {
+                    // Voice emotion runs locally and can take longer than ASR on a phone.
+                    // Give it a small head start for this reply, but never make the user wait
+                    // for a full model inference before their words are shown and answered.
+                    var voiceEmotionTask = emotionPerception.AnalyzeSpeechTurnAsync(userTurn.AudioWav, userTurn.Text, cancellationToken);
+                    await WaitBrieflyForVoiceEmotionAsync(voiceEmotionTask, cancellationToken);
+                }
+
+                await RespondToUserTextAsync(userTurn.Text, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -171,6 +181,19 @@ namespace SrtpAvatar
             finally
             {
                 FinishConversation(cancellationToken);
+            }
+        }
+        private static async Task WaitBrieflyForVoiceEmotionAsync(Task analysisTask, CancellationToken cancellationToken)
+        {
+            if (analysisTask == null)
+            {
+                return;
+            }
+
+            var budget = Task.Delay(VoiceEmotionResponseBudgetMilliseconds, cancellationToken);
+            if (await Task.WhenAny(analysisTask, budget) == analysisTask)
+            {
+                await analysisTask;
             }
         }
 

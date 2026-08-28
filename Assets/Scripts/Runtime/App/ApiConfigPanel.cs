@@ -172,7 +172,9 @@ namespace SrtpAvatar
             var key = string.IsNullOrWhiteSpace(apiKeyInput.text)
                 ? RuntimeSecrets.ResolveDeepSeekApiKey(config)
                 : apiKeyInput.text.Trim();
-            var baseUrl = string.IsNullOrWhiteSpace(baseUrlInput.text) ? RuntimeSecrets.ResolveDeepSeekBaseUrl(config) : baseUrlInput.text.Trim();
+            var baseUrl = string.IsNullOrWhiteSpace(baseUrlInput.text)
+                ? RuntimeSecrets.DefaultDeepSeekBaseUrl
+                : baseUrlInput.text.Trim();
             var model = string.IsNullOrWhiteSpace(modelInput.text) ? RuntimeSecrets.ResolveDeepSeekModel(config) : modelInput.text.Trim();
 
             if (!RuntimeSecrets.TryNormalizeDeepSeekBaseUrl(baseUrl, out var safeBaseUrl, out var warning, out var error))
@@ -202,8 +204,14 @@ namespace SrtpAvatar
         private void RefreshFields()
         {
             var settings = RuntimeSecrets.LoadDeepSeekSettings();
-            var baseUrl = string.IsNullOrWhiteSpace(settings.baseUrl) ? RuntimeSecrets.ResolveDeepSeekBaseUrl(config) : settings.baseUrl;
+            var configuredBaseUrl = !string.IsNullOrWhiteSpace(settings.baseUrl)
+                ? settings.baseUrl
+                : config == null ? "" : config.deepSeekBaseUrl;
+            var baseUrl = string.IsNullOrWhiteSpace(configuredBaseUrl)
+                ? RuntimeSecrets.DefaultDeepSeekBaseUrl
+                : configuredBaseUrl.Trim();
             var model = string.IsNullOrWhiteSpace(settings.model) ? RuntimeSecrets.ResolveDeepSeekModel(config) : settings.model;
+            var validBaseUrl = RuntimeSecrets.TryNormalizeDeepSeekBaseUrl(baseUrl, out _, out _, out var baseUrlError);
 
             if (baseUrlInput != null)
             {
@@ -218,6 +226,12 @@ namespace SrtpAvatar
             if (apiKeyInput != null)
             {
                 apiKeyInput.text = "";
+            }
+
+            if (!validBaseUrl)
+            {
+                SetFeedback($"当前 Base URL 无效：{baseUrlError}\n请修正后再保存，未使用默认地址替换。");
+                return;
             }
 
             SetFeedback(string.IsNullOrWhiteSpace(RuntimeSecrets.ResolveDeepSeekApiKey(config))

@@ -20,7 +20,7 @@ namespace SrtpAvatar
 
         public bool CanRecognize => config.preferAndroidNativeSpeech && androidSpeech.CanRecognize;
 
-        public async Task<string> ListenForUserTextAsync(Action<string> reportSubtitle, CancellationToken cancellationToken)
+        public async Task<SpeechRecognitionTurn> ListenForUserTurnAsync(Action<string> reportSubtitle, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (CanRecognize)
@@ -31,12 +31,20 @@ namespace SrtpAvatar
                     throw new AppException(AppErr.micPerm, PermissionMessage(permission));
                 }
 
-                reportSubtitle?.Invoke("系统语音识别启动中，请说话...");
+                reportSubtitle?.Invoke("正在准备语音服务...");
                 var timeout = Mathf.Max(5f, config.speechRecognitionTimeoutSeconds);
-                string text;
+                SpeechRecognitionTurn turn;
                 try
                 {
-                    text = await TaskTimeout.WithTimeout(androidSpeech.RecognizeAsync(config.speechLanguage, config.preferOnDeviceSpeechRecognition), timeout, "系统语音识别超时。", androidSpeech.CancelRecognition, cancellationToken);
+                    turn = await TaskTimeout.WithTimeout(
+                        androidSpeech.RecognizeAsync(
+                            config.speechLanguage,
+                            config.preferOnDeviceSpeechRecognition,
+                            () => reportSubtitle?.Invoke("正在聆听，请说话")),
+                        timeout,
+                        "系统语音识别超时。",
+                        androidSpeech.CancelRecognition,
+                        cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
@@ -47,14 +55,20 @@ namespace SrtpAvatar
                     var message = string.IsNullOrWhiteSpace(ex.Message) ? "系统语音识别失败。" : ex.Message;
                     throw new AppException(AppErr.speech, message, ex);
                 }
-                if (!string.IsNullOrWhiteSpace(text))
+
+                if (!string.IsNullOrWhiteSpace(turn?.Text))
                 {
-                    return text.Trim();
+                    return turn;
                 }
             }
 
-
             throw new AppException(AppErr.speech, "当前设备没有可用的系统语音识别服务。");
+        }
+
+        public async Task<string> ListenForUserTextAsync(Action<string> reportSubtitle, CancellationToken cancellationToken)
+        {
+            var turn = await ListenForUserTurnAsync(reportSubtitle, cancellationToken);
+            return turn.Text;
         }
 
         public void Cancel()

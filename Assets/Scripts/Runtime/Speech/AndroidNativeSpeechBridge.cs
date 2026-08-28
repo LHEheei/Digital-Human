@@ -7,9 +7,11 @@ namespace SrtpAvatar
     public sealed class AndroidNativeSpeechBridge : MonoBehaviour
     {
         private const char CallbackSeparator = '\n';
-        private TaskCompletionSource<string> recognitionCompletion;
+        private TaskCompletionSource<SpeechRecognitionTurn> recognitionCompletion;
         private TaskCompletionSource<bool> ttsCompletion;
         private string recognitionId;
+        private Action recognitionReadyCallback;
+        private byte[] recognitionAudioWav;
         private string utteranceId;
         private bool ttsSpeaking;
 
@@ -45,7 +47,7 @@ namespace SrtpAvatar
 
         public bool IsTtsSpeaking => ttsSpeaking;
 
-        public Task<string> RecognizeAsync(string language, bool preferOnDevice)
+        public Task<SpeechRecognitionTurn> RecognizeAsync(string language, bool preferOnDevice, Action onReady)
         {
 #if UNITY_ANDROID && !UNITY_EDITOR
             EnsureBridge();
@@ -56,11 +58,13 @@ namespace SrtpAvatar
 
             CancelRecognition();
             recognitionId = Guid.NewGuid().ToString("N");
-            recognitionCompletion = new TaskCompletionSource<string>();
+            recognitionCompletion = new TaskCompletionSource<SpeechRecognitionTurn>();
+            recognitionReadyCallback = onReady;
+            recognitionAudioWav = null;
             bridge.Call("startRecognition", NormalizeLanguage(language), recognitionId, preferOnDevice);
             return recognitionCompletion.Task;
 #else
-            return Task.FromException<string>(new InvalidOperationException("当前环境没有可用的 Android 语音识别服务。"));
+            return Task.FromException<SpeechRecognitionTurn>(new InvalidOperationException("当前环境没有可用的 Android 语音识别服务。"));
 #endif
         }
 
@@ -69,6 +73,8 @@ namespace SrtpAvatar
             var completion = recognitionCompletion;
             recognitionCompletion = null;
             recognitionId = null;
+            recognitionReadyCallback = null;
+            recognitionAudioWav = null;
             completion?.TrySetCanceled();
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (bridge != null)
@@ -112,6 +118,23 @@ namespace SrtpAvatar
 #endif
         }
 
+        public void OnAndroidSpeechAudio(string callback)
+        {
+            if (!TryReadCallback(callback, recognitionId, out var payload))
+            {
+                return;
+            }
+
+            try
+            {
+                recognitionAudioWav = string.IsNullOrWhiteSpace(payload) ? null : Convert.FromBase64String(payload);
+            }
+            catch (FormatException)
+            {
+                recognitionAudioWav = null;
+            }
+        }
+
         public void OnAndroidSpeechResult(string callback)
         {
             if (!TryReadCallback(callback, recognitionId, out var text))
@@ -120,6 +143,16 @@ namespace SrtpAvatar
             }
 
             CompleteRecognition(text, null);
+        }
+
+        public void OnAndroidSpeechReady(string callback)
+        {
+            if (!TryReadCallback(callback, recognitionId, out _) || recognitionCompletion == null)
+            {
+                return;
+            }
+
+            recognitionReadyCallback?.Invoke();
         }
 
         public void OnAndroidSpeechError(string callback)
@@ -161,8 +194,11 @@ namespace SrtpAvatar
         private void CompleteRecognition(string text, string error)
         {
             var completion = recognitionCompletion;
+            var audioWav = recognitionAudioWav;
             recognitionCompletion = null;
             recognitionId = null;
+            recognitionReadyCallback = null;
+            recognitionAudioWav = null;
             if (completion == null)
             {
                 return;
@@ -170,7 +206,7 @@ namespace SrtpAvatar
 
             if (error == null)
             {
-                completion.TrySetResult(string.IsNullOrWhiteSpace(text) ? "" : text.Trim());
+                completion.TrySetResult(new SpeechRecognitionTurn(text, audioWav));
             }
             else
             {

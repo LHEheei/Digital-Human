@@ -28,6 +28,11 @@ namespace SrtpAvatar
         public bool CanRecognize => Input.CanRecognize;
         public bool CanSpeak => Output.CanSpeak;
 
+        public Task<SpeechRecognitionTurn> ListenForUserTurnAsync(Action<string> reportSubtitle, CancellationToken cancellationToken = default)
+        {
+            return Input.ListenForUserTurnAsync(reportSubtitle, cancellationToken);
+        }
+
         public Task<string> ListenForUserTextAsync(Action<string> reportSubtitle, CancellationToken cancellationToken = default)
         {
             return Input.ListenForUserTextAsync(reportSubtitle, cancellationToken);

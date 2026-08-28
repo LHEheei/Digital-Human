@@ -78,20 +78,17 @@ namespace SrtpAvatar
                 return;
             }
 
-            var nowUnixMs = EmotionTime.UtcNowUnixMs;
-            statusText.text = $"{perception.ConnectionStatus}\n面部表情线索：{Format(perception.FaceEmotion, perception.FaceStatus, nowUnixMs, EmotionSamplingPolicy.FaceFreshnessMs)}\n语音线索：{Format(perception.VoiceEmotion, perception.VoiceStatus, nowUnixMs, EmotionSamplingPolicy.VoiceFreshnessMs)}\n整体建议：{Format(perception.FusionEmotion, "", nowUnixMs, EmotionSamplingPolicy.FusionFreshnessMs)}";
+            statusText.text = $"面部：{Format(perception.FaceEmotion)}\n语音：{Format(perception.VoiceEmotion)}\n综合：{Format(perception.FusionEmotion)}";
         }
 
-        private static string Format(UserEmo emotion, string status, long nowUnixMs, long freshnessMs)
+        private static string Format(UserEmo emotion)
         {
             if (emotion != null && emotion.IsUsable)
             {
-                return emotion.IsFresh(nowUnixMs, freshnessMs)
-                    ? $"{emotion.label} {emotion.score:0.00}"
-                    : $"最近 {emotion.label} {emotion.score:0.00}（已过期）";
+                return $"{emotion.label} {emotion.score:0.00}";
             }
 
-            return string.IsNullOrWhiteSpace(status) ? "暂无" : $"暂无（{status}）";
+            return "暂无";
         }
     }
 }

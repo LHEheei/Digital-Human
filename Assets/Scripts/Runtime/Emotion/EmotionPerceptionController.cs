@@ -64,7 +64,7 @@ namespace SrtpAvatar
                 : "感知：已关闭";
             if (config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace)
             {
-                VoiceStatus = "端侧语音情绪模型正在初始化。";
+                VoiceStatus = "等待下一句对话的语音线索。";
             }
         }
 
@@ -87,7 +87,7 @@ namespace SrtpAvatar
         public void ResumeAudioCapture()
         {
             audioCaptureSuspended = false;
-            if (captureReady && microphoneClip == null)
+            if (UsesContinuousVoiceCapture && captureReady && microphoneClip == null)
             {
                 StartMicrophone();
             }
@@ -124,7 +124,7 @@ namespace SrtpAvatar
                 _ = CaptureFaceAsync(lifetimeCancellation.Token);
             }
 
-            if (SupportsVoiceCapture && !audioCaptureSuspended && microphoneClip != null && !voiceRequestInFlight && EmotionSamplingPolicy.IsDue(now, lastVoiceSampleAt, config.emotionVoiceWindowSeconds))
+            if (UsesContinuousVoiceCapture && !audioCaptureSuspended && microphoneClip != null && !voiceRequestInFlight && EmotionSamplingPolicy.IsDue(now, lastVoiceSampleAt, config.emotionVoiceWindowSeconds))
             {
                 lastVoiceSampleAt = now;
                 _ = CaptureVoiceAsync(lifetimeCancellation.Token);
@@ -159,7 +159,7 @@ namespace SrtpAvatar
                 var cameraPermission = SupportsFaceCapture
                     ? await new CameraPermissionService().RequestAsync(cancellationToken)
                     : PermState.granted;
-                var microphonePermission = SupportsVoiceCapture
+                var microphonePermission = UsesContinuousVoiceCapture
                     ? await new MicrophonePermissionService().RequestAsync(cancellationToken)
                     : PermState.granted;
                 if (cameraPermission != PermState.granted || microphonePermission != PermState.granted)
@@ -174,7 +174,7 @@ namespace SrtpAvatar
                     StartCamera();
                 }
 
-                if (SupportsVoiceCapture)
+                if (UsesContinuousVoiceCapture)
                 {
                     StartMicrophone();
                 }
@@ -236,6 +236,11 @@ namespace SrtpAvatar
         private bool SupportsFaceCapture => !(emotionService is IEmotionCaptureCapabilities capabilities) || capabilities.SupportsFaceCapture;
 
         private bool SupportsVoiceCapture => !(emotionService is IEmotionCaptureCapabilities capabilities) || capabilities.SupportsVoiceCapture;
+
+        // Android local mode receives the actual user utterance from the speech bridge.
+        // It must not start a second microphone stream for ambient sampling.
+        private bool UsesSpeechTurnVoiceCapture => config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace;
+        private bool UsesContinuousVoiceCapture => SupportsVoiceCapture && !UsesSpeechTurnVoiceCapture;
 
         private string ActiveConnectionStatus => config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
             ? "感知：手机端本地人脸分析"
@@ -313,6 +318,36 @@ namespace SrtpAvatar
             }
         }
 
+        public async Task AnalyzeSpeechTurnAsync(byte[] wav, string transcript, CancellationToken cancellationToken)
+        {
+            if (!UsesSpeechTurnVoiceCapture || wav == null || wav.Length == 0 || voiceRequestInFlight)
+            {
+                return;
+            }
+
+            voiceRequestInFlight = true;
+            try
+            {
+                var rawResult = await emotionService.GetVoiceAsync(wav, cancellationToken);
+                var calibrated = VoiceEmotionCalibrationPolicy.Calibrate(rawResult, transcript, FaceEmotion, EmotionTime.UtcNowUnixMs);
+                await ApplyVoiceResultAsync(calibrated, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex);
+                VoiceStatus = "语音情绪分析暂不可用。";
+                NotifyUpdated();
+            }
+            finally
+            {
+                voiceRequestInFlight = false;
+            }
+        }
+
         private async Task CaptureVoiceAsync(CancellationToken cancellationToken)
         {
             voiceRequestInFlight = true;
@@ -324,21 +359,9 @@ namespace SrtpAvatar
                     return;
                 }
 
-                var result = await emotionService.GetVoiceAsync(wav, cancellationToken);
-                if (result.IsUsable)
-                {
-                    VoiceEmotion = result;
-                    VoiceStatus = "";
-                    connectionStatus = ActiveConnectionStatus;
-                    NotifyUpdated();
-                    await RefreshFusionAsync(cancellationToken);
-                }
-                else
-                {
-                    VoiceStatus = result.error;
-                    connectionStatus = IsServiceUnavailable(result) ? ActiveConnectionErrorStatus : ActiveConnectionStatus;
-                    NotifyUpdated();
-                }
+                var rawResult = await emotionService.GetVoiceAsync(wav, cancellationToken);
+                var calibrated = VoiceEmotionCalibrationPolicy.Calibrate(rawResult, string.Empty, FaceEmotion, EmotionTime.UtcNowUnixMs);
+                await ApplyVoiceResultAsync(calibrated, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -346,7 +369,7 @@ namespace SrtpAvatar
             catch (Exception ex)
             {
                 Debug.LogException(ex);
-                VoiceStatus = "请求失败：" + ex.Message;
+                VoiceStatus = "语音情绪分析暂不可用。";
                 connectionStatus = ActiveConnectionErrorStatus;
                 NotifyUpdated();
             }
@@ -356,6 +379,32 @@ namespace SrtpAvatar
             }
         }
 
+        private async Task ApplyVoiceResultAsync(UserEmo result, CancellationToken cancellationToken)
+        {
+            if (result != null && result.IsUsable)
+            {
+                VoiceEmotion = result;
+                VoiceStatus = "";
+                connectionStatus = ActiveConnectionStatus;
+                NotifyUpdated();
+                await RefreshFusionAsync(cancellationToken);
+                return;
+            }
+
+            VoiceStatus = DescribeVoiceFailure(result == null ? "" : result.error);
+            connectionStatus = IsServiceUnavailable(result) ? ActiveConnectionErrorStatus : ActiveConnectionStatus;
+            NotifyUpdated();
+        }
+
+        private static string DescribeVoiceFailure(string error)
+        {
+            if (!string.IsNullOrWhiteSpace(error) && error.IndexOf("未检测到清晰语音", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "本句语音较弱，未生成情绪线索。";
+            }
+
+            return string.IsNullOrWhiteSpace(error) ? "本句未生成语音情绪线索。" : error;
+        }
         private async Task RefreshFusionAsync(CancellationToken cancellationToken)
         {
             if (fusionService == null)

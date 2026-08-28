@@ -4,19 +4,21 @@ namespace SrtpAvatar
 {
     public static class EmotionDisclosureGuard
     {
-        private static readonly string[] DisclosureMarkers =
+        private static readonly string[] TechnicalDisclosureMarkers =
         {
-            "感觉你", "看起来你", "听起来你", "你似乎", "你显得", "我看出你", "我听出你", "识别出你", "心情不错"
+            "通过摄像头", "从摄像头", "通过镜头", "从镜头", "通过麦克风", "从麦克风",
+            "语音分析", "面部表情分析", "系统识别出", "系统检测到", "算法识别出", "模型识别出",
+            "我识别出你", "我检测到你"
         };
 
         public static string Sanitize(string reply)
         {
             var candidate = string.IsNullOrWhiteSpace(reply) ? "" : reply.Trim();
-            foreach (var marker in DisclosureMarkers)
+            foreach (var marker in TechnicalDisclosureMarkers)
             {
                 if (candidate.IndexOf(marker, StringComparison.Ordinal) >= 0)
                 {
-                    return "你好呀，有什么想聊或需要一起处理的吗？";
+                    return "我可能理解得不完全准确，但愿意听你多说一点。";
                 }
             }
 

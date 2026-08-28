@@ -35,7 +35,7 @@ MonoBehaviour:
   emotionCameraSampleIntervalSeconds: 1
   emotionVoiceWindowSeconds: 4
   preferFrontEmotionCamera: 1
-  showEmotionCameraPreview: 1
+  showEmotionCameraPreview: 0
   enableEmotionEvaluationPanel: 1
   enableCarCommunication: 0
   carCommunicationMode: 1

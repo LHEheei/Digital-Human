@@ -41,22 +41,6 @@ namespace SrtpAvatar
                 : config.deepSeekApiKey.Trim();
         }
 
-        public static string ResolveDeepSeekBaseUrl(AppConfig config)
-        {
-            if (TryResolveDeepSeekBaseUrl(config, out var normalized, out var warning, out var error))
-            {
-                if (!string.IsNullOrWhiteSpace(warning))
-                {
-                    Debug.LogWarning(warning);
-                }
-
-                return normalized;
-            }
-
-            Debug.LogWarning($"DeepSeek Base URL was rejected: {error}");
-            return DefaultDeepSeekBaseUrl;
-        }
-
         public static bool TryResolveDeepSeekBaseUrl(AppConfig config, out string normalized, out string warning, out string error)
         {
             var settings = LoadDeepSeekSettings();

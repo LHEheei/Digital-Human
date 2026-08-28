@@ -4,6 +4,11 @@ import android.app.Activity;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
+import android.util.Base64;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -12,11 +17,15 @@ import android.speech.tts.UtteranceProgressListener;
 
 import com.unity3d.player.UnityPlayer;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 import org.vosk.Model;
 import org.vosk.Recognizer;
 import org.vosk.android.StorageService;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Locale;
 
@@ -33,10 +42,16 @@ public final class NativeSpeechBridge {
     private static final String OFFLINE_MODEL_STORAGE = "srtp-vosk-model";
     private static final float OFFLINE_SAMPLE_RATE = 16000.0f;
     private static final int OFFLINE_LISTEN_TIMEOUT_MILLIS = 15000;
+    private static final int OFFLINE_MAX_CAPTURE_MILLIS = 16000;
+    private static final int OFFLINE_MAX_EMOTION_MILLIS = 8000;
+    private static final int VOICE_ACTIVITY_SAMPLE_THRESHOLD = 350;
 
     private Model offlineModel;
     private Recognizer offlineRecognizer;
-    private org.vosk.android.SpeechService offlineSpeechService;
+    private AudioRecord offlineAudioRecord;
+    private Thread offlineAudioThread;
+    private ByteArrayOutputStream offlinePcm;
+    private volatile boolean offlineListening;
     private String offlineSessionId;
     private boolean offlineModelLoading;
     private String offlineInitError = "";
@@ -66,16 +81,23 @@ public final class NativeSpeechBridge {
             @Override
             public void run() {
                 try {
+                    // Prefer the bundled Vosk model whenever it is ready. This avoids relying on
+                    // device-specific speech services that may report ready but drop the first utterance.
+                    if (preferOnDevice && offlineModel != null && startOfflineRecognition(sessionId)) {
+                        return;
+                    }
+                    if (preferOnDevice && offlineModelLoading) {
+                        send(sessionId, "OnAndroidSpeechError", "离线语音模型正在准备，请稍后重试。");
+                        return;
+                    }
                     if (!isSystemRecognitionAvailable()) {
                         releaseSystemSpeechRecognizer();
                         if (startOfflineRecognition(sessionId)) {
                             return;
                         }
-
                         send(sessionId, "OnAndroidSpeechError", offlineUnavailableMessage());
                         return;
                     }
-
                     stopOfflineRecognition();
                     releaseSystemSpeechRecognizer();
                     speechRecognizer = createSpeechRecognizer(preferOnDevice);
@@ -85,14 +107,14 @@ public final class NativeSpeechBridge {
                     Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
                     intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, normalizeLanguage(languageTag));
-                    intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+                    intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
                     intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, usingOnDeviceRecognizer);
                     intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
                     // These are advisory values, but on supported recognizers they make a
                     // spoken turn finish promptly without requiring the user to tap again.
                     intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500);
-                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900);
-                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1100);
+                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 650);
+                    intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 850);
                     speechRecognizer.startListening(intent);
                 } catch (Exception ex) {
                     if (sessionId.equals(activeSystemSessionId)) {
@@ -265,13 +287,16 @@ public final class NativeSpeechBridge {
         stopOfflineRecognition();
         try {
             offlineRecognizer = new Recognizer(offlineModel, OFFLINE_SAMPLE_RATE);
-            offlineRecognizer.setEndpointerDelays(5.0f, 0.8f, 15.0f);
-            offlineSpeechService = new org.vosk.android.SpeechService(offlineRecognizer, OFFLINE_SAMPLE_RATE);
+            // A short end-of-turn delay keeps automatic conversation responsive
+            // while still allowing normal Chinese sentence-final pauses.
+            offlineRecognizer.setEndpointerDelays(4.0f, 0.55f, 15.0f);
             offlineSessionId = sessionId;
-            if (!offlineSpeechService.startListening(new UnityOfflineRecognitionListener(sessionId), OFFLINE_LISTEN_TIMEOUT_MILLIS)) {
+            offlinePcm = new ByteArrayOutputStream();
+            if (!startOfflineAudioLoop(sessionId)) {
                 stopOfflineRecognition();
                 return false;
             }
+            send(sessionId, "OnAndroidSpeechReady", "");
             return true;
         } catch (Exception ex) {
             offlineInitError = "离线语音识别启动失败：" + safeExceptionMessage(ex);
@@ -280,17 +305,115 @@ public final class NativeSpeechBridge {
         }
     }
 
+    private boolean startOfflineAudioLoop(final String sessionId) {
+        int minBuffer = AudioRecord.getMinBufferSize(
+            (int) OFFLINE_SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT);
+        if (minBuffer <= 0) {
+            offlineInitError = "手机麦克风录音缓冲区不可用。";
+            return false;
+        }
+
+        int bufferSize = Math.max(minBuffer * 2, 4096);
+        offlineAudioRecord = new AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            (int) OFFLINE_SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize);
+        if (offlineAudioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+            offlineInitError = "手机麦克风录音初始化失败。";
+            return false;
+        }
+
+        offlineListening = true;
+        offlineAudioRecord.startRecording();
+        offlineAudioThread = new Thread(new Runnable() {
+            @Override public void run() {
+                readOfflineAudio(sessionId);
+            }
+        }, "SrtpVoskAudio");
+        offlineAudioThread.start();
+        return true;
+    }
+
+    private void readOfflineAudio(String sessionId) {
+        byte[] buffer = new byte[4096];
+        long startedAt = SystemClock.elapsedRealtime();
+        try {
+            while (offlineListening && sessionId.equals(offlineSessionId) && offlineAudioRecord != null) {
+                int count = offlineAudioRecord.read(buffer, 0, buffer.length);
+                if (count > 0) {
+                    appendOfflinePcm(buffer, count);
+                    Recognizer recognizer = offlineRecognizer;
+                    if (recognizer != null && recognizer.acceptWaveForm(buffer, count)) {
+                        String text = extractVoskText(recognizer.getResult());
+                        if (text.length() > 0) {
+                            finishOfflineRecognition(sessionId, text, null);
+                            return;
+                        }
+                    }
+                }
+
+                if (SystemClock.elapsedRealtime() - startedAt >= OFFLINE_LISTEN_TIMEOUT_MILLIS) {
+                    Recognizer recognizer = offlineRecognizer;
+                    String finalText = recognizer == null ? "" : extractVoskText(recognizer.getFinalResult());
+                    finishOfflineRecognition(sessionId, finalText, finalText.length() == 0 ? "没有听到说话。" : null);
+                    return;
+                }
+            }
+        } catch (JSONException ex) {
+            if (sessionId.equals(offlineSessionId)) {
+                finishOfflineRecognition(sessionId, null, "离线语音模型返回格式无效：" + safeExceptionMessage(ex));
+            }
+        } catch (Throwable ex) {
+            if (sessionId.equals(offlineSessionId)) {
+                finishOfflineRecognition(sessionId, null, "离线语音识别失败：" + safeThrowableMessage(ex));
+            }
+        }
+    }
+
+    private void appendOfflinePcm(byte[] buffer, int count) {
+        if (offlinePcm == null || count <= 0) {
+            return;
+        }
+
+        int maximumBytes = (int) OFFLINE_SAMPLE_RATE * 2 * OFFLINE_MAX_CAPTURE_MILLIS / 1000;
+        int writable = Math.min(count, Math.max(0, maximumBytes - offlinePcm.size()));
+        if (writable > 0) {
+            offlinePcm.write(buffer, 0, writable);
+        }
+    }
+
     private void stopOfflineRecognition() {
         offlineSessionId = null;
-        if (offlineSpeechService != null) {
-            offlineSpeechService.cancel();
-            offlineSpeechService.shutdown();
-            offlineSpeechService = null;
+        offlineListening = false;
+
+        AudioRecord recorder = offlineAudioRecord;
+        offlineAudioRecord = null;
+        if (recorder != null) {
+            try {
+                recorder.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                recorder.release();
+            } catch (Exception ignored) {
+            }
         }
+
+        Thread reader = offlineAudioThread;
+        offlineAudioThread = null;
+        if (reader != null && reader != Thread.currentThread()) {
+            reader.interrupt();
+        }
+
         if (offlineRecognizer != null) {
             offlineRecognizer.close();
             offlineRecognizer = null;
         }
+        offlinePcm = null;
     }
 
     private void finishOfflineRecognition(String sessionId, String text, String error) {
@@ -298,16 +421,92 @@ public final class NativeSpeechBridge {
             return;
         }
 
+        byte[] speechWav = error == null && offlinePcm != null ? createSpeechWav(offlinePcm.toByteArray()) : null;
         stopOfflineRecognition();
         if (error != null) {
             send(sessionId, "OnAndroidSpeechError", error);
         } else if (text == null || text.trim().length() == 0) {
             send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");
         } else {
+            if (speechWav != null && speechWav.length > 0) {
+                send(sessionId, "OnAndroidSpeechAudio", Base64.encodeToString(speechWav, Base64.NO_WRAP));
+            }
             send(sessionId, "OnAndroidSpeechResult", text.trim());
         }
     }
 
+    private byte[] createSpeechWav(byte[] pcm) {
+        byte[] trimmed = trimPcmToSpeech(pcm);
+        if (trimmed == null || trimmed.length < (int) OFFLINE_SAMPLE_RATE * 2) {
+            return null;
+        }
+
+        ByteBuffer wav = ByteBuffer.allocate(44 + trimmed.length).order(ByteOrder.LITTLE_ENDIAN);
+        wav.put(new byte[] {'R', 'I', 'F', 'F'});
+        wav.putInt(36 + trimmed.length);
+        wav.put(new byte[] {'W', 'A', 'V', 'E'});
+        wav.put(new byte[] {'f', 'm', 't', ' '});
+        wav.putInt(16);
+        wav.putShort((short) 1);
+        wav.putShort((short) 1);
+        wav.putInt((int) OFFLINE_SAMPLE_RATE);
+        wav.putInt((int) OFFLINE_SAMPLE_RATE * 2);
+        wav.putShort((short) 2);
+        wav.putShort((short) 16);
+        wav.put(new byte[] {'d', 'a', 't', 'a'});
+        wav.putInt(trimmed.length);
+        wav.put(trimmed);
+        return wav.array();
+    }
+
+    private byte[] trimPcmToSpeech(byte[] pcm) {
+        if (pcm == null || pcm.length < 2) {
+            return null;
+        }
+
+        int sampleCount = pcm.length / 2;
+        int first = -1;
+        int last = -1;
+        for (int sample = 0; sample < sampleCount; sample++) {
+            int byteIndex = sample * 2;
+            short value = (short) ((pcm[byteIndex] & 0xff) | (pcm[byteIndex + 1] << 8));
+            if (Math.abs((int) value) >= VOICE_ACTIVITY_SAMPLE_THRESHOLD) {
+                if (first < 0) {
+                    first = sample;
+                }
+                last = sample;
+            }
+        }
+        if (first < 0) {
+            return null;
+        }
+
+        int padding = (int) (OFFLINE_SAMPLE_RATE * 0.25f);
+        int minimumSamples = (int) OFFLINE_SAMPLE_RATE;
+        int maximumSamples = (int) OFFLINE_SAMPLE_RATE * OFFLINE_MAX_EMOTION_MILLIS / 1000;
+        int start = Math.max(0, first - padding);
+        int end = Math.min(sampleCount, last + padding + 1);
+        if (end - start < minimumSamples) {
+            int deficit = minimumSamples - (end - start);
+            start = Math.max(0, start - deficit / 2);
+            end = Math.min(sampleCount, end + deficit - (start == 0 ? 0 : deficit / 2));
+        }
+        if (end - start < minimumSamples) {
+            return null;
+        }
+        if (end - start > maximumSamples) {
+            int center = (first + last) / 2;
+            start = Math.max(0, center - maximumSamples / 2);
+            end = Math.min(sampleCount, start + maximumSamples);
+            start = Math.max(0, end - maximumSamples);
+        }
+
+        int byteStart = start * 2;
+        int byteLength = (end - start) * 2;
+        byte[] result = new byte[byteLength];
+        System.arraycopy(pcm, byteStart, result, 0, byteLength);
+        return result;
+    }
     private void releaseSystemSpeechRecognizer() {
         activeSystemSessionId = null;
         if (speechRecognizer != null) {
@@ -327,14 +526,18 @@ public final class NativeSpeechBridge {
         return "当前手机没有可用的语音识别服务，离线语音模型也不可用。";
     }
 
-    private String extractVoskText(String hypothesis) {
-        try {
-            return new JSONObject(hypothesis == null ? "" : hypothesis).optString("text", "").trim();
-        } catch (Exception ignored) {
-            return "";
+    private String extractVoskText(String hypothesis) throws JSONException {
+        if (hypothesis == null) {
+            throw new JSONException("离线模型未返回识别结果。");
         }
-    }
 
+        return new JSONObject(hypothesis).optString("text", "").trim();
+    }
+    private String safeThrowableMessage(Throwable throwable) {
+        return throwable == null || throwable.getMessage() == null || throwable.getMessage().length() == 0
+            ? "未知错误。"
+            : throwable.getMessage();
+    }
     private String safeExceptionMessage(Exception exception) {
         return exception == null || exception.getMessage() == null || exception.getMessage().length() == 0
             ? "未知错误。"
@@ -392,6 +595,7 @@ public final class NativeSpeechBridge {
 
     private final class UnityRecognitionListener implements RecognitionListener {
         private final String sessionId;
+        private String lastPartialResult = "";
 
         UnityRecognitionListener(String sessionId) {
             this.sessionId = sessionId;
@@ -399,23 +603,14 @@ public final class NativeSpeechBridge {
 
         @Override
         public void onReadyForSpeech(Bundle params) {
+            if (sessionId.equals(activeSystemSessionId)) {
+                send(sessionId, "OnAndroidSpeechReady", "");
+            }
         }
-
-        @Override
-        public void onBeginningOfSpeech() {
-        }
-
-        @Override
-        public void onRmsChanged(float rmsdB) {
-        }
-
-        @Override
-        public void onBufferReceived(byte[] buffer) {
-        }
-
-        @Override
-        public void onEndOfSpeech() {
-        }
+        @Override public void onBeginningOfSpeech() { }
+        @Override public void onRmsChanged(float rmsdB) { }
+        @Override public void onBufferReceived(byte[] buffer) { }
+        @Override public void onEndOfSpeech() { }
 
         @Override
         public void onError(int error) {
@@ -424,6 +619,12 @@ public final class NativeSpeechBridge {
             }
 
             activeSystemSessionId = null;
+            // Some recognizers emit a partial transcript, then end with an
+            // error instead of onResults. Retain that real user speech.
+            if (lastPartialResult.length() > 0) {
+                send(sessionId, "OnAndroidSpeechResult", lastPartialResult);
+                return;
+            }
             if ((error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)
                 && startOfflineRecognition(sessionId)) {
                 return;
@@ -439,56 +640,26 @@ public final class NativeSpeechBridge {
 
             activeSystemSessionId = null;
             ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-            if (matches == null || matches.size() == 0) {
-                send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");
+            if (matches != null && matches.size() > 0 && matches.get(0) != null && matches.get(0).trim().length() > 0) {
+                send(sessionId, "OnAndroidSpeechResult", matches.get(0).trim());
                 return;
             }
-
-            send(sessionId, "OnAndroidSpeechResult", matches.get(0));
+            if (lastPartialResult.length() > 0) {
+                send(sessionId, "OnAndroidSpeechResult", lastPartialResult);
+                return;
+            }
+            send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");
         }
 
         @Override
         public void onPartialResults(Bundle partialResults) {
-        }
-
-        @Override
-        public void onEvent(int eventType, Bundle params) {
-        }
-    }
-
-    private final class UnityOfflineRecognitionListener implements org.vosk.android.RecognitionListener {
-        private final String sessionId;
-
-        UnityOfflineRecognitionListener(String sessionId) {
-            this.sessionId = sessionId;
-        }
-
-        @Override
-        public void onPartialResult(String hypothesis) {
-        }
-
-        @Override
-        public void onResult(String hypothesis) {
-            String text = extractVoskText(hypothesis);
-            if (text.length() > 0) {
-                finishOfflineRecognition(sessionId, text, null);
+            ArrayList<String> matches = partialResults == null ? null : partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            if (matches != null && matches.size() > 0 && matches.get(0) != null && matches.get(0).trim().length() > 0) {
+                lastPartialResult = matches.get(0).trim();
             }
         }
 
-        @Override
-        public void onFinalResult(String hypothesis) {
-            finishOfflineRecognition(sessionId, extractVoskText(hypothesis), null);
-        }
-
-        @Override
-        public void onError(Exception exception) {
-            finishOfflineRecognition(sessionId, null, "离线语音识别失败：" + safeExceptionMessage(exception));
-        }
-
-        @Override
-        public void onTimeout() {
-            finishOfflineRecognition(sessionId, null, "没有听到说话。" );
-        }
+        @Override public void onEvent(int eventType, Bundle params) { }
     }
     private String errorMessage(int error) {
         switch (error) {

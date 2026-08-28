@@ -50,6 +50,7 @@ namespace SrtpAvatar
             return message.IndexOf("没有听到说话", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("没有识别到语音", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("speech timeout", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("离线语音模型正在准备", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("no match", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("超时", StringComparison.OrdinalIgnoreCase) >= 0;
         }

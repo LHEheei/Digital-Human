@@ -70,6 +70,23 @@ namespace SrtpAvatarEditor
                 BuildOptions.Development | BuildOptions.AllowDebugging);
         }
 
+        [MenuItem("SRTP/Build Android Latest Co-install APK")]
+        public static void BuildAndroidLatestCoInstallApk()
+        {
+            var originalIdentity = new AndroidAppIdentity();
+            try
+            {
+                ConfigureAndroidPlayerSettings();
+                PlayerSettings.productName = "DesktopAvatarCar 最新版";
+                PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Android, "com.srtp.desktopavatarcar.latest");
+                BuildAndroidApk("Builds/Comparison/DesktopAvatarCar-latest-coinstall.apk", BuildOptions.None, false);
+            }
+            finally
+            {
+                originalIdentity.Restore();
+            }
+        }
+
         [MenuItem("SRTP/Build Android Standalone APK (On-device Face)")]
         public static void BuildAndroidStandaloneApk()
         {
@@ -107,7 +124,7 @@ namespace SrtpAvatarEditor
             }
         }
 
-        private static void BuildAndroidApk(string outputPath, BuildOptions buildOptions)
+        private static void BuildAndroidApk(string outputPath, BuildOptions buildOptions, bool configurePlayerSettings = true)
         {
             var outputDirectory = Path.GetDirectoryName(outputPath);
             if (!string.IsNullOrWhiteSpace(outputDirectory))
@@ -115,7 +132,10 @@ namespace SrtpAvatarEditor
                 Directory.CreateDirectory(outputDirectory);
             }
 
-            ConfigureAndroidPlayerSettings();
+            if (configurePlayerSettings)
+            {
+                ConfigureAndroidPlayerSettings();
+            }
 
             var scene = SceneManager.GetActiveScene();
             var scenePath = scene.IsValid() && !string.IsNullOrWhiteSpace(scene.path) ? scene.path : ScenePath;
@@ -502,6 +522,18 @@ namespace SrtpAvatarEditor
             {
                 config.enableEmotionPerception = enabled;
                 config.emotionRuntimeMode = runtimeMode;
+            }
+        }
+
+        private sealed class AndroidAppIdentity
+        {
+            private readonly string productName = PlayerSettings.productName;
+            private readonly string applicationIdentifier = PlayerSettings.GetApplicationIdentifier(NamedBuildTarget.Android);
+
+            public void Restore()
+            {
+                PlayerSettings.productName = productName;
+                PlayerSettings.SetApplicationIdentifier(NamedBuildTarget.Android, applicationIdentifier);
             }
         }
 

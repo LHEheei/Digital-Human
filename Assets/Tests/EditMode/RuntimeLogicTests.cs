@@ -94,6 +94,15 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
+        public void SpeechRecognitionTurn_PreservesRecognizedTextAndCapturedAudio()
+        {
+            var turn = new SpeechRecognitionTurn("  你好  ", new byte[] { 1, 2, 3 });
+
+            Assert.AreEqual("你好", turn.Text);
+            Assert.IsTrue(turn.HasAudio);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, turn.AudioWav);
+        }
+        [Test]
         public void CoreServices_RejectMissingConfiguration()
         {
             Assert.Throws<ArgumentNullException>(() => new DialogueService(null));
@@ -275,20 +284,33 @@ namespace SrtpAvatar.Tests
             var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .7f, source = "fusion" });
             Assert.AreEqual("sorrow", applied.emotion);
             Assert.AreEqual("nod", applied.gesture);
-            StringAssert.Contains("放慢", applied.reply);
+            Assert.AreEqual("好的，我在。", applied.reply);
 
             var lowConfidence = EmotionResponsePolicy.Apply(new DialogueDecision { emotion = "joy" }, new UserEmo { label = "angry", score = .4f, source = "fusion" });
             Assert.AreEqual("joy", lowConfidence.emotion);
         }
 
         [Test]
-        public void EmotionResponsePolicy_RemovesEmotionDisclosureFromReply()
+        public void EmotionResponsePolicy_RejectsMissingDecision()
         {
-            var decision = new DialogueDecision { reply = "感觉你挺平静的，心情不错的样子。", gesture = "none" };
+            Assert.Throws<ArgumentNullException>(() => EmotionResponsePolicy.Apply(null, null));
+        }
+        [Test]
+        public void EmotionResponsePolicy_PreservesGentleEmotionReflection()
+        {
+            var decision = new DialogueDecision { reply = "听起来你可能有点累。", gesture = "none" };
             var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "neutral", score = .9f, source = "fusion" });
 
-            Assert.AreEqual("你好呀，有什么想聊或需要一起处理的吗？", applied.reply);
-            StringAssert.DoesNotContain("感觉你", applied.reply);
+            Assert.AreEqual("听起来你可能有点累。", applied.reply);
+        }
+
+        [Test]
+        public void EmotionResponsePolicy_RemovesTechnicalEmotionDisclosure()
+        {
+            var decision = new DialogueDecision { reply = "我通过摄像头识别出你很难过。", gesture = "none" };
+            var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .9f, source = "fusion" });
+
+            Assert.AreEqual("我可能理解得不完全准确，但愿意听你多说一点。", applied.reply);
         }
 
         [Test]
@@ -530,6 +552,7 @@ namespace SrtpAvatar.Tests
             Assert.IsTrue(AutoConversationPolicy.HasUsableText("你好"));
             Assert.IsFalse(AutoConversationPolicy.HasUsableText("  "));
             Assert.IsTrue(AutoConversationPolicy.ShouldQuietlyRetry("没有听到说话。"));
+            Assert.IsTrue(AutoConversationPolicy.ShouldQuietlyRetry("离线语音模型正在准备，请稍后重试。"));
             Assert.IsTrue(AutoConversationPolicy.ShouldQuietlyRetry(new AppException(AppErr.speech, "识别失败", new InvalidOperationException("没有识别到语音内容。"))));
             Assert.IsFalse(AutoConversationPolicy.ShouldQuietlyRetry("系统语音识别网络失败。"));
             Assert.AreEqual(1.2f, AutoConversationPolicy.NormalizeRetryDelay(0f));
@@ -541,6 +564,38 @@ namespace SrtpAvatar.Tests
         {
             Assert.AreEqual("你：今天怎么样？\n\n她：我在这里，想听你说。", AutoConversationPolicy.FormatTurn(" 今天怎么样？ ", " 我在这里，想听你说。 "));
             Assert.AreEqual("你：（未识别到语音）\n\n她：（暂无回复）", AutoConversationPolicy.FormatTurn(" ", " "));
+        }
+
+        [Test]
+        public void VoiceEmotionCalibrationPolicy_DowngradesUncorroboratedSorrowToNeutral()
+        {
+            var raw = new UserEmo
+            {
+                label = "sorrow",
+                score = .91f,
+                source = "voice",
+                capturedAtUnixMs = 1000L,
+                scores = new[]
+                {
+                    new EmotionScore { label = "sorrow", score = .91f },
+                    new EmotionScore { label = "neutral", score = .04f }
+                }
+            };
+
+            var calibrated = VoiceEmotionCalibrationPolicy.Calibrate(raw, "你好", null, 1200L);
+
+            Assert.AreEqual("neutral", calibrated.label);
+            Assert.GreaterOrEqual(calibrated.score, .55f);
+        }
+
+        [Test]
+        public void VoiceEmotionCalibrationPolicy_KeepsSorrowWithSemanticOrFaceEvidence()
+        {
+            var raw = new UserEmo { label = "sorrow", score = .8f, source = "voice", capturedAtUnixMs = 1000L };
+            Assert.AreEqual("sorrow", VoiceEmotionCalibrationPolicy.Calibrate(raw, "我今天很难过", null, 1200L).label);
+
+            var face = new UserEmo { label = "sorrow", score = .7f, source = "face", capturedAtUnixMs = 1100L };
+            Assert.AreEqual("sorrow", VoiceEmotionCalibrationPolicy.Calibrate(raw, "你好", face, 1200L).label);
         }
 
         private static UserEmo FaceSample(string label, float labelScore, float neutralScore, long capturedAt)
