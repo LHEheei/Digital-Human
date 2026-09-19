@@ -190,13 +190,15 @@ namespace SrtpAvatar
 
             RuntimeSecrets.SaveDeepSeekSettings(safeBaseUrl, key, model);
             apiKeyInput.text = "";
-            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时无法开始 AI 对话。" : "已保存 API 配置，重新点击 MIC 即可使用。";
+            Object.FindAnyObjectByType<DigitalHumanAppController>()?.RefreshConversationSettings();
+            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时无法开始 AI 对话。" : "已保存 API 配置，正在准备语音对话。";
             SetFeedback(string.IsNullOrWhiteSpace(warning) ? saved : $"{saved}\n警告：{warning}");
         }
 
         private void ClearSettings()
         {
             RuntimeSecrets.ClearDeepSeekSettings();
+            Object.FindAnyObjectByType<DigitalHumanAppController>()?.RefreshConversationSettings();
             RefreshFields();
             SetFeedback("已清除本机 API 配置，AI 对话当前不可用。");
         }

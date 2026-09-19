@@ -5,7 +5,6 @@ namespace SrtpAvatar
 {
     public static class DialogueParser
     {
-
         public static bool TryFromPossiblyWrappedJson(string raw, out DialogueDecision decision)
         {
             decision = null;
@@ -20,38 +19,29 @@ namespace SrtpAvatar
                 return false;
             }
 
-            // JsonUtility applies field initializers when a field is absent, so verify the required reply field first.
-            if (json.IndexOf("\"reply\"", StringComparison.Ordinal) < 0)
-            {
-                return false;
-            }
-
+            // Keep a missing reply distinct from DialogueDecision's display default.
+            var parsed = new DialogueDecision { reply = null };
             try
             {
-                var parsed = JsonUtility.FromJson<DialogueDecision>(json);
-                if (parsed == null || string.IsNullOrWhiteSpace(parsed.reply))
-                {
-                    return false;
-                }
-
-                decision = parsed.Normalize();
-                return true;
+                JsonUtility.FromJsonOverwrite(json, parsed);
             }
-            catch (Exception)
+            catch (ArgumentException)
             {
                 return false;
             }
+
+            if (string.IsNullOrWhiteSpace(parsed.reply))
+            {
+                return false;
+            }
+
+            decision = parsed.Normalize();
+            return true;
         }
 
         private static string ExtractJsonObject(string raw)
         {
             var text = raw.Trim();
-            var fenceIndex = text.IndexOf("```", StringComparison.Ordinal);
-            if (fenceIndex >= 0)
-            {
-                text = text.Replace("```json", "").Replace("```JSON", "").Replace("```", "").Trim();
-            }
-
             var start = text.IndexOf('{');
             var end = text.LastIndexOf('}');
             return start >= 0 && end > start ? text.Substring(start, end - start + 1) : text;

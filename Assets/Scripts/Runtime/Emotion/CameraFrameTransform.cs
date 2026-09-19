@@ -6,11 +6,21 @@ namespace SrtpAvatar
     {
         public static Color32[] OrientAndScale(Color32[] source, int sourceWidth, int sourceHeight, int rotationDegrees, bool verticallyMirrored, int maximumDimension, out int targetWidth, out int targetHeight)
         {
+            Color32[] result = null;
+            OrientAndScale(source, sourceWidth, sourceHeight, rotationDegrees, verticallyMirrored, maximumDimension,
+                ref result, out targetWidth, out targetHeight);
+            return result;
+        }
+
+        public static void OrientAndScale(Color32[] source, int sourceWidth, int sourceHeight, int rotationDegrees,
+            bool verticallyMirrored, int maximumDimension, ref Color32[] result, out int targetWidth, out int targetHeight)
+        {
             targetWidth = 0;
             targetHeight = 0;
             if (source == null || sourceWidth <= 0 || sourceHeight <= 0 || source.Length < sourceWidth * sourceHeight || maximumDimension <= 0)
             {
-                return System.Array.Empty<Color32>();
+                result = System.Array.Empty<Color32>();
+                return;
             }
 
             var rotation = NormalizeRightAngle(rotationDegrees);
@@ -20,7 +30,8 @@ namespace SrtpAvatar
             targetWidth = Mathf.Max(1, Mathf.RoundToInt(rotatedWidth * scale));
             targetHeight = Mathf.Max(1, Mathf.RoundToInt(rotatedHeight * scale));
 
-            var result = new Color32[targetWidth * targetHeight];
+            if (result == null || result.Length != targetWidth * targetHeight)
+                result = new Color32[targetWidth * targetHeight];
             for (var y = 0; y < targetHeight; y++)
             {
                 var rotatedY = Mathf.Min(rotatedHeight - 1, Mathf.FloorToInt((y + 0.5f) * rotatedHeight / targetHeight));
@@ -37,7 +48,6 @@ namespace SrtpAvatar
                 }
             }
 
-            return result;
         }
 
         private static int NormalizeRightAngle(int rotationDegrees)

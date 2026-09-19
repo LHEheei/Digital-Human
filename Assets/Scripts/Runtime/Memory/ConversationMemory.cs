@@ -1,22 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace SrtpAvatar
 {
+    public enum MemoryClearScope { None, Recent, All }
+
     public sealed class ConversationMemory
     {
-        private static readonly string[] ClearRequestKeywords =
-        {
-            "清除记忆",
-            "清空记忆",
-            "清掉记忆",
-            "删除记忆",
-            "忘记我",
-            "忘记刚才",
-            "忘掉刚才",
-            "重新开始对话"
-        };
+        private static readonly Regex ClearCommand = new Regex(
+            @"^(?:请)?(?:帮我)?(?<command>清除记忆|清空记忆|清掉记忆|删除记忆|清除所有记忆|清空所有记忆|删除所有记忆|把记忆清空|忘记我|忘记刚才|忘掉刚才|重新开始对话)(?:吧)?[。！!]*$",
+            RegexOptions.CultureInvariant);
 
         private readonly List<Turn> turns = new List<Turn>();
 
@@ -65,23 +60,16 @@ namespace SrtpAvatar
             return builder.ToString().Trim();
         }
 
-        public static bool IsClearRequest(string userText)
+        public static bool IsClearRequest(string userText) => GetClearScope(userText) != MemoryClearScope.None;
+
+        public static MemoryClearScope GetClearScope(string userText)
         {
-            if (string.IsNullOrWhiteSpace(userText))
-            {
-                return false;
-            }
-
-            var text = userText.Trim();
-            for (var i = 0; i < ClearRequestKeywords.Length; i++)
-            {
-                if (text.Contains(ClearRequestKeywords[i]))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            if (string.IsNullOrWhiteSpace(userText)) return MemoryClearScope.None;
+            var match = ClearCommand.Match(Regex.Replace(userText.Trim(), @"\s+", ""));
+            if (!match.Success) return MemoryClearScope.None;
+            var command = match.Groups["command"].Value;
+            return command == "忘记刚才" || command == "忘掉刚才" || command == "重新开始对话"
+                ? MemoryClearScope.Recent : MemoryClearScope.All;
         }
 
         private void Trim(int maxTurns)

@@ -160,8 +160,29 @@ namespace SrtpAvatarEditor
                 options = buildOptions
             };
 
-            var report = BuildPipeline.BuildPlayer(options);
-            Debug.Log($"Android build finished: {report.summary.result}, {report.summary.totalSize} bytes, {outputPath}");
+            var buildConfig = AssetDatabase.LoadAssetAtPath<AppConfig>(ConfigPath);
+            var previousDiagnostics = buildConfig.enableDiagnostics;
+            var previousEvaluation = buildConfig.enableEmotionEvaluationPanel;
+            try
+            {
+                var development = (buildOptions & BuildOptions.Development) != 0;
+                buildConfig.enableDiagnostics = development;
+                buildConfig.enableEmotionEvaluationPanel = development;
+                EditorUtility.SetDirty(buildConfig);
+                AssetDatabase.SaveAssets();
+                var report = BuildPipeline.BuildPlayer(options);
+                Debug.Log($"Android build finished: {report.summary.result}, {report.summary.totalSize} bytes, {outputPath}");
+                if (report.summary.result != UnityEditor.Build.Reporting.BuildResult.Succeeded)
+                    throw new BuildFailedException("Android build failed: " + report.summary.result);
+            }
+            finally
+            {
+                var restored = AssetDatabase.LoadAssetAtPath<AppConfig>(ConfigPath);
+                restored.enableDiagnostics = previousDiagnostics;
+                restored.enableEmotionEvaluationPanel = previousEvaluation;
+                EditorUtility.SetDirty(restored);
+                AssetDatabase.SaveAssets();
+            }
         }
 
         [MenuItem("SRTP/Use Selected VRM Avatar")]

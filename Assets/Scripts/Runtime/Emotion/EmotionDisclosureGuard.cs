@@ -18,7 +18,7 @@ namespace SrtpAvatar
             {
                 if (candidate.IndexOf(marker, StringComparison.Ordinal) >= 0)
                 {
-                    return "我可能理解得不完全准确，但愿意听你多说一点。";
+                    return "愿意和我多说一点吗？";
                 }
             }
 

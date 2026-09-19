@@ -19,6 +19,7 @@ import com.unity3d.player.UnityPlayer;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONArray;
 import org.vosk.Model;
 import org.vosk.Recognizer;
 import org.vosk.android.StorageService;
@@ -28,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class NativeSpeechBridge {
     private final Activity activity;
@@ -35,6 +37,8 @@ public final class NativeSpeechBridge {
     private SpeechRecognizer speechRecognizer;
     private TextToSpeech textToSpeech;
     private boolean ttsReady;
+    private volatile String activeUtteranceId;
+    private final ConcurrentHashMap<String, PcmEnvelope> ttsEnvelopes = new ConcurrentHashMap<>();
     private boolean usingOnDeviceRecognizer;
     private String activeSystemSessionId;
 
@@ -163,6 +167,8 @@ public final class NativeSpeechBridge {
                     textToSpeech.setLanguage(locale);
                     Bundle params = new Bundle();
                     params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
+                    activeUtteranceId = utteranceId;
+                    ttsEnvelopes.clear();
                     int result = textToSpeech.speak(text == null || text.length() == 0 ? "好的。" : text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
                     if (result == TextToSpeech.ERROR) {
                         send(utteranceId, "OnAndroidTtsError", "系统 TTS 播报启动失败。");
@@ -175,6 +181,8 @@ public final class NativeSpeechBridge {
     }
 
     public void stopSpeaking() {
+        activeUtteranceId = null;
+        ttsEnvelopes.clear();
         if (activity == null) {
             return;
         }
@@ -227,23 +235,103 @@ public final class NativeSpeechBridge {
                     textToSpeech.setLanguage(Locale.CHINA);
                     textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                         @Override
+                        public void onBeginSynthesis(String utteranceId, int sampleRate, int audioFormat, int channels) {
+                            if (utteranceId.equals(activeUtteranceId))
+                                ttsEnvelopes.put(utteranceId, new PcmEnvelope(sampleRate, audioFormat, channels));
+                        }
+
+                        @Override
+                        public void onAudioAvailable(String utteranceId, byte[] audio) {
+                            PcmEnvelope envelope = ttsEnvelopes.get(utteranceId);
+                            if (envelope != null) envelope.append(utteranceId, audio);
+                        }
+
+                        @Override
+                        public void onRangeStart(String utteranceId, int start, int end, int frame) {
+                            PcmEnvelope envelope = ttsEnvelopes.get(utteranceId);
+                            if (envelope != null && envelope.sampleRate > 0)
+                                send(utteranceId, "OnAndroidTtsPlaybackPosition", Float.toString(frame / (float) envelope.sampleRate));
+                        }
+
+                        @Override
                         public void onStart(String utteranceId) {
                             send(utteranceId, "OnAndroidTtsStarted", "");
                         }
 
                         @Override
                         public void onDone(String utteranceId) {
+                            ttsEnvelopes.remove(utteranceId);
                             send(utteranceId, "OnAndroidTtsDone", "");
                         }
 
                         @Override
                         public void onError(String utteranceId) {
+                            ttsEnvelopes.remove(utteranceId);
                             send(utteranceId, "OnAndroidTtsError", "系统 TTS 播报失败。");
                         }
                     });
                 }
             }
         });
+    }
+
+    // Compact 20 ms RMS bins; no PCM or recognized text is sent back for mouth animation.
+    private final class PcmEnvelope {
+        final int sampleRate;
+        final int format;
+        final int bytesPerSample;
+        final int samplesPerBin;
+        final float stepSeconds;
+        int sampleBits;
+        int sampleByteCount;
+        int sampleCount;
+        int binIndex;
+        double energy;
+
+        PcmEnvelope(int sampleRate, int format, int channels) {
+            this.sampleRate = sampleRate;
+            this.format = format;
+            bytesPerSample = format == AudioFormat.ENCODING_PCM_8BIT ? 1
+                : format == AudioFormat.ENCODING_PCM_16BIT ? 2
+                : format == AudioFormat.ENCODING_PCM_FLOAT ? 4 : 0;
+            int frames = Math.max(1, sampleRate / 50);
+            samplesPerBin = frames * Math.max(1, channels);
+            stepSeconds = sampleRate > 0 ? frames / (float) sampleRate : 0.02f;
+        }
+
+        synchronized void append(String utteranceId, byte[] audio) {
+            if (bytesPerSample == 0 || sampleRate <= 0 || binIndex >= 6000) return;
+            try {
+                JSONArray levels = new JSONArray();
+                int firstBin = binIndex;
+                for (byte value : audio) {
+                    sampleBits |= (value & 0xff) << (sampleByteCount * 8);
+                    if (++sampleByteCount != bytesPerSample) continue;
+                    float sample = format == AudioFormat.ENCODING_PCM_8BIT ? (sampleBits - 128) / 128f
+                        : format == AudioFormat.ENCODING_PCM_16BIT ? (short) sampleBits / 32768f
+                        : Float.intBitsToFloat(sampleBits);
+                    sampleBits = 0;
+                    sampleByteCount = 0;
+                    if (Float.isNaN(sample) || Float.isInfinite(sample)) sample = 0f;
+                    energy += sample * sample;
+                    if (++sampleCount >= samplesPerBin) {
+                        float level = (float) Math.max(0, Math.min(1, (Math.sqrt(energy / sampleCount) - 0.008) * 14));
+                        levels.put((double) level);
+                        energy = 0;
+                        sampleCount = 0;
+                        if (++binIndex >= 6000) break;
+                    }
+                }
+                if (levels.length() == 0) return;
+                JSONObject result = new JSONObject();
+                result.put("startIndex", firstBin);
+                result.put("stepSeconds", stepSeconds);
+                result.put("levels", levels);
+                send(utteranceId, "OnAndroidTtsEnvelope", result.toString());
+            } catch (JSONException ex) {
+                android.util.Log.w("SRTP", "Could not encode TTS mouth envelope", ex);
+            }
+        }
     }
 
     private void initializeOfflineModel() {

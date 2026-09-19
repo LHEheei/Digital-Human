@@ -12,6 +12,7 @@ namespace SrtpAvatar
 
         private readonly string filePath;
         private MemoryData data;
+        private bool recoveredFromBackup;
 
         public LongTermMemoryStore()
             : this(Path.Combine(Application.persistentDataPath, FileName))
@@ -28,6 +29,65 @@ namespace SrtpAvatar
 
         public int Count => data.items.Count;
         public string FilePath => filePath;
+
+        public IReadOnlyList<MemoryEntry> GetEntries()
+        {
+            var entries = new MemoryEntry[data.items.Count];
+            for (var i = 0; i < entries.Length; i++)
+            {
+                var item = data.items[i];
+                entries[i] = new MemoryEntry(item.id, item.text, item.createdAt, item.updatedAt);
+            }
+            return Array.AsReadOnly(entries);
+        }
+
+        public void UpdateEntry(string id, string replacement)
+        {
+            var index = FindEntry(id);
+            var text = (replacement ?? "").Trim();
+            if (text.Length == 0 || text.Length > 80)
+                throw new ArgumentException("记忆内容需为 1–80 个字符。");
+            if (!MemoryFilter.ShouldRemember(text))
+                throw new ArgumentException("记忆不能包含密钥、密码或联系方式。");
+            if (data.items.Exists(item => item.id != id && string.Equals(item.text, text, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("已有相同内容的记忆，请修改内容或删除重复项。");
+            var items = new List<MemoryItem>(data.items);
+            var previous = items[index];
+            items[index] = new MemoryItem { id = previous.id, text = text, createdAt = previous.createdAt, updatedAt = DateTime.UtcNow.ToString("o") };
+            SaveUserRevision(new MemoryData { items = items });
+        }
+
+        public void DeleteEntry(string id)
+        {
+            var index = FindEntry(id);
+            var items = new List<MemoryItem>(data.items);
+            items.RemoveAt(index);
+            SaveUserRevision(new MemoryData { items = items });
+        }
+
+        private int FindEntry(string id)
+        {
+            var index = data.items.FindIndex(item => item.id == id);
+            if (index < 0) throw new ArgumentException("这条记忆已变化，请重新选择。");
+            return index;
+        }
+
+        // A user's correction/deletion must also replace the recovery snapshot.
+        private void SaveUserRevision(MemoryData updated)
+        {
+            try
+            {
+                var json = JsonUtility.ToJson(updated, true);
+                WriteAtomically(filePath + ".bak", json, null);
+                WriteAtomically(filePath, json, null);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                throw new AppException(AppErr.memory, "记忆更新失败，请检查设备存储后重试。", ex);
+            }
+            data = updated;
+            recoveredFromBackup = false;
+        }
 
         public string BuildContext(int maxItems)
         {
@@ -54,6 +114,7 @@ namespace SrtpAvatar
                 return false;
             }
 
+            var items = new List<MemoryItem>(data.items);
             var changed = false;
             var parts = memoryText.Split(new[] { '\n', '；', ';' }, StringSplitOptions.RemoveEmptyEntries);
             for (var i = 0; i < parts.Length; i++)
@@ -64,14 +125,15 @@ namespace SrtpAvatar
                     continue;
                 }
 
-                if (RefreshDuplicate(text))
+                if (RefreshDuplicate(items, text))
                 {
                     changed = true;
                     continue;
                 }
 
-                data.items.Add(new MemoryItem
+                items.Add(new MemoryItem
                 {
+                    id = Guid.NewGuid().ToString("N"),
                     text = text,
                     createdAt = DateTime.UtcNow.ToString("o"),
                     updatedAt = DateTime.UtcNow.ToString("o")
@@ -84,66 +146,122 @@ namespace SrtpAvatar
                 return false;
             }
 
-            changed |= Trim(maxItems);
-            Save();
+            Trim(items, maxItems);
+            Save(new MemoryData { items = items });
             return true;
         }
 
         public void Clear()
         {
-            data.items.Clear();
-            Save();
+            // Empty the recovery copy first so a completed clear can never restore old memories.
+            var empty = new MemoryData();
+            try
+            {
+                WriteAtomically(filePath + ".bak", JsonUtility.ToJson(empty, true), null);
+                WriteAtomically(filePath, JsonUtility.ToJson(empty, true), null);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                throw new AppException(AppErr.memory, "记忆清除失败，请检查设备存储后重试。", ex);
+            }
+            data = empty;
+            recoveredFromBackup = false;
         }
 
         private MemoryData Load()
         {
-            try
+            if (TryLoad(filePath, out var loaded)) return loaded;
+            if (TryLoad(filePath + ".bak", out loaded))
             {
-                if (!File.Exists(filePath))
-                {
-                    return new MemoryData();
-                }
-
-                var json = File.ReadAllText(filePath, Encoding.UTF8);
-                var loaded = JsonUtility.FromJson<MemoryData>(json);
-                if (loaded == null || loaded.items == null)
-                {
-                    Debug.LogWarning("Long-term memory file is empty or invalid; a new memory store will be used.");
-                    return new MemoryData();
-                }
-
+                recoveredFromBackup = true;
+                Debug.LogWarning("Long-term memory restored from its last good backup.");
                 return loaded;
             }
-            catch (Exception ex)
+            return new MemoryData();
+        }
+
+        private static bool TryLoad(string path, out MemoryData loaded)
+        {
+            loaded = null;
+            if (!File.Exists(path)) return false;
+            try
             {
-                Debug.LogWarning($"Failed to load long-term memory: {ex.Message}");
-                return new MemoryData();
+                // FromJsonOverwrite preserves the null sentinel for a missing items field.
+                var candidate = new MemoryData { items = null };
+                JsonUtility.FromJsonOverwrite(File.ReadAllText(path, Encoding.UTF8), candidate);
+                if (candidate.items == null || candidate.items.Exists(item => item == null || string.IsNullOrWhiteSpace(item.text)))
+                    throw new ArgumentException("Invalid memory items.");
+                var ids = new HashSet<string>();
+                foreach (var item in candidate.items)
+                {
+                    // Older save files have no id. Persist assigned ids with the next successful write.
+                    if (string.IsNullOrWhiteSpace(item.id) || !ids.Add(item.id))
+                    {
+                        item.id = Guid.NewGuid().ToString("N");
+                        ids.Add(item.id);
+                    }
+                }
+                loaded = candidate;
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
+            {
+                Debug.LogWarning($"Failed to read memory file {Path.GetFileName(path)}: {ex.Message}");
+                return false;
             }
         }
 
-        private void Save()
+        private void Save(MemoryData updated)
         {
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(filePath));
-                File.WriteAllText(filePath, JsonUtility.ToJson(data, true), Encoding.UTF8);
+                WriteAtomically(filePath, JsonUtility.ToJson(updated, true), recoveredFromBackup ? null : filePath + ".bak");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
-                Debug.LogWarning($"Failed to save long-term memory: {ex.Message}");
+                throw new AppException(AppErr.memory, "记忆写入失败，请检查设备存储后重试。", ex);
+            }
+            data = updated;
+            recoveredFromBackup = false;
+        }
+
+        private static void WriteAtomically(string target, string json, string backup)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target)));
+            var temporary = target + ".tmp";
+            // The old file stays intact until the flushed candidate is atomically replaced.
+            using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                var bytes = Encoding.UTF8.GetBytes(json);
+                stream.Write(bytes, 0, bytes.Length);
+                stream.Flush(true);
+            }
+            try
+            {
+                if (File.Exists(target)) File.Replace(temporary, target, backup);
+                else File.Move(temporary, target);
+            }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
             }
         }
 
-        private bool RefreshDuplicate(string text)
+        private static bool RefreshDuplicate(List<MemoryItem> items, string text)
         {
-            for (var i = 0; i < data.items.Count; i++)
+            for (var i = 0; i < items.Count; i++)
             {
-                if (string.Equals(data.items[i].text, text, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(items[i].text, text, StringComparison.OrdinalIgnoreCase))
                 {
-                    var item = data.items[i];
-                    item.updatedAt = DateTime.UtcNow.ToString("o");
-                    data.items.RemoveAt(i);
-                    data.items.Add(item);
+                    var item = new MemoryItem
+                    {
+                        id = items[i].id,
+                        text = items[i].text,
+                        createdAt = items[i].createdAt,
+                        updatedAt = DateTime.UtcNow.ToString("o")
+                    };
+                    items.RemoveAt(i);
+                    items.Add(item);
                     return true;
                 }
             }
@@ -151,17 +269,13 @@ namespace SrtpAvatar
             return false;
         }
 
-        private bool Trim(int maxItems)
+        private static void Trim(List<MemoryItem> items, int maxItems)
         {
-            var changed = false;
             var safeMax = Math.Max(1, maxItems);
-            while (data.items.Count > safeMax)
+            while (items.Count > safeMax)
             {
-                data.items.RemoveAt(0);
-                changed = true;
+                items.RemoveAt(0);
             }
-
-            return changed;
         }
 
         private static string NormalizeMemory(string text)
@@ -173,12 +287,14 @@ namespace SrtpAvatar
         [Serializable]
         private sealed class MemoryData
         {
+            public int version = 2;
             public List<MemoryItem> items = new List<MemoryItem>();
         }
 
         [Serializable]
         private sealed class MemoryItem
         {
+            public string id;
             public string text;
             public string createdAt;
             public string updatedAt;

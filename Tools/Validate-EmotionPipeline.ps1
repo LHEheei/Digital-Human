@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$SkipUnity,
+    [switch]$SkipEmotionService,
     [switch]$SkipAndroidBuild,
     [string]$UnityPath = "C:\Program Files\Unity\Hub\Editor\6000.4.6f1\Editor\Unity.exe",
     [string]$ServiceUrl = "http://127.0.0.1:8000"
@@ -12,8 +13,6 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $serviceRoot = Join-Path $projectRoot 'EmotionService'
 $python = Join-Path $serviceRoot '.venv\Scripts\python.exe'
 $validationDirectory = Join-Path $projectRoot 'Builds\Validation'
-$testResults = Join-Path $validationDirectory 'editmode-validation-results.xml'
-$testLog = Join-Path $validationDirectory 'editmode-validation.log'
 $buildLog = Join-Path $validationDirectory 'android-validation-build.log'
 
 function Write-Step([string]$Message) {
@@ -31,14 +30,15 @@ function Assert-UnityIsReady {
         throw 'Unity Editor is currently running. Close it before the unattended validation so it does not compete for the project database.'
     }
 
-    $locks = @(
-        (Join-Path $projectRoot 'Library\ArtifactDB-lock'),
-        (Join-Path $projectRoot 'Library\SourceAssetDB-lock')
-    ) | Where-Object { Test-Path -LiteralPath $_ }
-
-    if ($locks.Count -gt 0) {
-        throw "Unity has stale project lock files. Confirm Unity is closed, then remove only these locks and rerun: $($locks -join ', ')"
+    $lockPath = Join-Path $projectRoot 'Temp\UnityLockfile'
+    if (Test-Path -LiteralPath $lockPath) {
+        try {
+            $lockProbe = [IO.File]::Open($lockPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+            $lockProbe.Dispose()
+        }
+        catch { throw "Unity still holds the project lock: $lockPath" }
     }
+
 }
 
 function Invoke-Unity([string[]]$Arguments, [string]$Description) {
@@ -49,8 +49,9 @@ function Invoke-Unity([string[]]$Arguments, [string]$Description) {
     }
 }
 
-Require-File $python 'EmotionService virtual-environment Python'
 New-Item -ItemType Directory -Force -Path $validationDirectory | Out-Null
+if (-not $SkipEmotionService) {
+Require-File $python 'EmotionService virtual-environment Python'
 
 Write-Step 'Running EmotionService contract tests'
 Push-Location $serviceRoot
@@ -75,34 +76,41 @@ if ($health.status -ne 'ok') {
 }
 Write-Host "Service ready: face=$($health.models.faceLandmarkerLoaded), voice=$($health.models.voiceModelLoaded)" -ForegroundColor Green
 
+}
+else { Write-Host 'LAN emotion service validation skipped (on-device workflow).' }
+
 if ($SkipUnity) {
-    Write-Host "`nValidation passed: Python tests and local service health are OK. Unity steps were skipped." -ForegroundColor Green
+    Write-Host "`nRequested service checks completed. Unity checks were skipped." -ForegroundColor Green
     exit 0
 }
 
 Require-File $UnityPath 'Unity executable'
 Assert-UnityIsReady
 
-Remove-Item -LiteralPath $testResults -Force -ErrorAction SilentlyContinue
-Invoke-Unity @(
-    '-batchmode',
-    '-projectPath', $projectRoot,
-    '-runTests',
-    '-testPlatform', 'editmode',
-    '-testResults', $testResults,
-    '-logFile', $testLog
-) 'Running Unity EditMode tests'
-
-Require-File $testResults 'Unity EditMode test result file'
-[xml]$xml = Get-Content -LiteralPath $testResults
-$suite = $xml.SelectSingleNode('//test-run')
-if ($null -eq $suite -or $suite.result -ne 'Passed' -or [int]$suite.failed -ne 0) {
-    throw "Unity EditMode tests did not pass. Read $testResults and $testLog."
+foreach ($testPlatform in @('EditMode', 'PlayMode')) {
+    Assert-UnityIsReady
+    $testResults = Join-Path $validationDirectory "$($testPlatform.ToLower())-validation-results.xml"
+    $testLog = Join-Path $validationDirectory "$($testPlatform.ToLower())-validation.log"
+    Remove-Item -LiteralPath $testResults -Force -ErrorAction SilentlyContinue
+    Invoke-Unity @(
+        '-batchmode',
+        '-projectPath', $projectRoot,
+        '-runTests',
+        '-testPlatform', $testPlatform,
+        '-testResults', $testResults,
+        '-logFile', $testLog
+    ) "Running Unity $testPlatform tests"
+    Require-File $testResults "$testPlatform result file"
+    [xml]$xml = Get-Content -LiteralPath $testResults
+    $suite = $xml.SelectSingleNode('//test-run')
+    if ($null -eq $suite -or $suite.result -ne 'Passed' -or [int]$suite.failed -ne 0 -or [int]$suite.total -eq 0) {
+        throw "Unity $testPlatform tests did not pass. Read $testResults and $testLog."
+    }
+    Write-Host "Unity $testPlatform passed: $($suite.passed)/$($suite.total) tests." -ForegroundColor Green
 }
-Write-Host "Unity EditMode passed: $($suite.passed)/$($suite.total) tests." -ForegroundColor Green
 
 if ($SkipAndroidBuild) {
-    Write-Host "`nValidation passed: service, Python tests, and Unity EditMode tests are OK. Android build was skipped." -ForegroundColor Green
+    Write-Host "`nRequested service checks and Unity EditMode/PlayMode tests passed. Android build was skipped." -ForegroundColor Green
     exit 0
 }
 
@@ -119,5 +127,5 @@ if (-not (Select-String -LiteralPath $buildLog -Pattern 'Build Finished, Result:
     throw "Unity exited normally, but the Android success marker was not found. Read $buildLog."
 }
 
-Write-Host "`nFull validation passed: service health, Python tests, Unity tests, and Android build." -ForegroundColor Green
+Write-Host "`nRequested service checks, Unity EditMode/PlayMode tests, and Android build passed." -ForegroundColor Green
 Write-Host "Artifacts: $validationDirectory"

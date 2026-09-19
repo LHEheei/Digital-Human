@@ -8,5 +8,6 @@ namespace SrtpAvatar
         public abstract void SetEmotion(AvatarEmotion next);
         public abstract void SetSpeechLevel(float level);
         public abstract void PlayGesture(AvatarGesture gesture);
+        public abstract void FinishGesture();
     }
 }

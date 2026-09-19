@@ -1,83 +1,127 @@
 # SRTP 数字人 Android 原型
 
-Unity `6000.4.6f1` 项目。当前交付的是一个可独立运行的软件闭环：语音输入、DeepSeek 或本地演示对话、结构化决策、VRM 数字人表情/动作、基础说话口型模拟、短期与长期记忆，以及保留但默认关闭的小车通信入口。
+基于 Unity `6000.4.6f1` 的多模态数字人应用：自动语音输入、DeepSeek 对话、面部与语音情绪感知、VRM 表情和动作、语音播报，以及短期和长期记忆。
 
-> 小车和蓝牙并非已验证的产品能力。`carIntent` 只是候选意图，必须经过本地白名单与固定协议 token 转换；模型原始输出不会直接发送给硬件。
+当前资源配置启用 Android 端侧情绪感知。手机完成面部、语音情绪推理与融合；对话需要网络和使用者自己的 DeepSeek Key。局域网 `EmotionService` 用于开发联调，小车通信默认关闭。
+
+## 开始使用
+
+1. 使用 Unity `6000.4.6f1` 打开项目，等待导入与编译完成，运行 EditMode 和 PlayMode 测试。
+2. 使用 `Assets/Scenes/DesktopAvatarDemo.unity` 构建 Android 应用，或从 [演示版本索引](Releases/ReleaseIndex.md) 选择已有安装包。
+3. 在应用右上角 API 面板配置 HTTPS Base URL、模型和 Key，再授予麦克风及相机权限。
+4. 等待“正在聆听”后直接说话。数字人播报期间暂停聆听，结束后自动恢复。未配置 Key 时，界面提示完成 API 设置。
 
 ## 运行链路
 
 ```text
-MIC
-  -> SpeechInputService (Android ASR 或本地模拟输入)
-  -> DialogueService (DeepSeek 或本地演示)
-  -> DialogueDecision (reply / avatar emotion / gesture / carIntent / memory)
-  -> AvatarSpeechDriver + SpeechOutputService (Android TTS 或本地提示音)
+Android ASR -> SpeechRecognitionTurn（文本与可用的语音音频）
+                    |                 |
+                    |                 -> 语音情绪分析
+                    |                    + 最新面部结果 -> 情绪融合
+                    v
+TalkInput（文本与有效的情绪结果）
+  -> DialogueService / DeepSeek
+  -> DialogueDecision（reply / emotion / gesture / carIntent / memory）
+  -> VRM 表情与动作 + Android TTS + 音频节奏口型
 ```
 
-`DigitalHumanAppController` 仅负责场景初始化与流程编排；`AppUi` 管理状态、字幕、提示和 MIC 按钮。每次对话都有 `CancellationTokenSource`：销毁场景或启动下一轮时，控制器会通过 `SpeechService.CancelAll()`、小车服务入口和会话 token 取消未完成工作，避免旧回调继续更新 UI、数字人或小车。
+`DigitalHumanAppController` 负责初始化和会话编排，`AppUi` 管理状态与字幕。端侧语音情绪分析复用本轮 ASR 音频，对话最多等待其 150 ms，再使用当时可用的结果。切入后台、停用对象或销毁场景时，会话会取消 ASR、TTS 和请求；返回前台会在旧会话清理完后恢复。`enableAutoConversation` 控制是否自动聆听，API 设置保存后立即重新准备对话。
 
-## 目录结构
+## 项目结构
 
-- `Assets/Scripts/Runtime/App/`：控制器、UI 适配、配置面板与运行时配置。
-- `Avatar/`：VRM 表情、动作、基础口型与本地提示音。
-- `Speech/`：麦克风权限、Android ASR、Android TTS 和回调 ID 隔离。
-- `Dialogue/`：DeepSeek 请求、JSON 解析、提示词、`TalkInput`。
-- `Memory/`：短期记忆、长期 JSON 记忆和敏感信息过滤。
-- `Emotion/`：用户情绪的数据模型、接口和本地演示实现。
-- `Car/`：既有 HTTPS HTTP 与 Android 蓝牙 SPP 通信边界；不含配对页面或新协议。
-- `Common/`：超时与统一错误类型。
-- `Assets/Tests/EditMode/`：无需设备和网络的 Unity Test Framework 测试。
+| 路径 | 职责 |
+| --- | --- |
+| `Assets/Scripts/Runtime/App/` | 会话控制、UI、API 面板与配置 |
+| `Assets/Scripts/Runtime/Speech/` | Android ASR、TTS、权限与回调管理 |
+| `Assets/Scripts/Runtime/Dialogue/` | DeepSeek 请求、提示词、JSON 解析与 `TalkInput` |
+| `Assets/Scripts/Runtime/Emotion/` | 感知采集、时序处理、融合与评测 |
+| `Assets/Scripts/Runtime/Avatar/` | VRM 表情、动作、音频口型与提示音 |
+| `Assets/Scripts/Runtime/Memory/` | 会话记忆、长期记忆与敏感信息过滤 |
+| `Assets/Scripts/Runtime/Car/` | 指令校验、HTTP 与 Android 蓝牙 SPP 通信 |
+| `Assets/Plugins/Android/` | 原生语音与情绪推理桥接 |
+| `EmotionService/` | Python 局域网情绪服务 |
+| `Assets/Tests/EditMode/` | Unity 运行逻辑测试 |
+| `Tools/` | 模型导出、验证与版本归档脚本 |
 
-## 语音、对话与错误提示
+## 情绪感知
 
-ASR 与 TTS 是独立能力：启动提示分别显示输入（Android ASR/本地模拟）和输出（Android TTS/本地提示音），不会用一个笼统的“系统语音”状态代替两者。Android 首次使用麦克风会请求 `RECORD_AUDIO`；授权结果区分 `granted`、`denied`、`blocked` 和 `timeout`，编辑器中仍可使用本地演示输入。
+| 模式 | 处理方式 | 使用条件 |
+| --- | --- | --- |
+| `AndroidOnDeviceFace` | 手机端面部模型、语音模型与本地融合 | Android 设备；当前默认配置 |
+| `LanService` | 上传 JPEG / WAV 到 Python 服务，调用服务端融合 | 运行 [EmotionService](EmotionService/README.md)，配置可达地址 |
+| `Disabled` 或关闭 `enableEmotionPerception` | 关闭情绪采集 | 保留语音对话流程 |
 
-`TaskTimeout` 支持 `Task` 与 `Task<T>`，主任务完成会立即取消计时器；超时会触发取消入口，异常会原样向上交给统一错误层。`AppErr` 区分麦克风权限、ASR、TTS、网络、认证、JSON、配置、小车、取消和未知错误。取消不会显示成系统故障，技术详情只写入 Console，且不会记录 API Key 或完整敏感请求。
+`UserEmo` 保存感知结果，类别为 `neutral`、`joy`、`angry`、`sorrow`、`surprised`，包括分数、来源、时间戳与错误信息。面部结果在 3 秒内、语音结果在 6 秒内参与输入和融合。端侧与服务端的融合规则见 [质量验收协议](Docs/EmotionQualityEvaluation.md)。
 
-## 配置与安全
+`TalkInput` 将有效的面部、语音和融合结果随文本传给对话服务。情绪线索用于调整语气和数字人表现，以用户的表达为主。`DialogueDecision.emotion` 为后续句子的展示表情提供默认值，问候、共情等句子可按本地规则调整；感知结果与展示表情分别建模。
 
-提交的 [`Assets/Resources/OpenAIConfig.asset`](Assets/Resources/OpenAIConfig.asset) 是无 Key 的默认演示配置。运行时 API 设置仅保存在：
+相机像素、旋转缩放输出和编码纹理会复用，只处理新相机帧；持续低于约 24 FPS 时将面部采样间隔加倍。进入后台释放采集资源。
 
-```text
-Application.persistentDataPath/deepseek_api_settings.json
-```
+端侧面部推理使用 [内置 HSEmotion 模型](Assets/Resources/Models/README.md)，语音推理使用内置 ONNX 模型。`DemoEmoService` 为测试提供固定结果。
 
-Base URL 仅接受 HTTPS；空值使用 `https://api.deepseek.com`。非官方 HTTPS 域名会明确警告，因为 Key 会发送至该服务；HTTP、带用户信息或非法 URL 会被拒绝。不要把 API Key 写入资产、README 或提交记录。
+## 语音与错误处理
 
-## 用户情绪与数字人表情
+演示界面区分语音服务准备与实际聆听；收到原生 ready 回调后才显示“正在聆听”。权限拒绝、权限禁止和服务错误显示在聊天面板，重试期间保留，服务就绪后清除。设备缺少语音服务时会显示原因并按既有间隔重试；开发包另外显示 ASR、TTS 与情绪诊断。首次使用麦克风请求 `RECORD_AUDIO` 权限，授权结果分为 `granted`、`denied`、`blocked` 和 `timeout`。
 
-两者刻意分离：
+`TaskTimeout` 管理超时与取消，`AppErr` 统一区分权限、语音、网络、认证、JSON、配置和小车错误。TTS 失败时保留文字回复并播放一次本地提示音。会话取消按正常流程收尾，错误详情写入 Console。
 
-- `UserEmo` 表示对用户的识别结果：`label`（`neutral`、`joy`、`angry`、`sorrow`、`surprised`）、`score`（0..1）、`source`（`face`、`voice`、`fusion`）和 `error`。非法标签回退为 `neutral`，非法来源为 `unknown`；`fun` 不属于用户情绪标签。
-- `DialogueDecision.emotion` 表示数字人最终要展示的头像表情，保留现有 `AvatarEmotion` 的用途。
-- `IEmoService` 定义 `GetFaceAsync(byte[])` 与 `GetVoiceAsync(byte[])`（含取消 token）。`DemoEmoService` 只返回稳定的联调数据；空输入给出可识别的错误结果。
-- `TalkInput` 把文本与可选人脸/语音情绪放在一次对话输入中。只有有效结果会以固定、带“不确定性”说明的上下文传给 DeepSeek；当前主流程仍只传文本。
+`enableStreamingReplies` 默认开启：完整句子到达后即可播报，完整 JSON 校验通过后再提交记忆。每句实际开始播放时选择表情与手势，动作设有跨句、跨轮冷却；完整回复的元数据不会在句中突然启动新动作。启用小车通信时使用整段回复流程，保留停止指令优先执行的顺序。兼容服务不支持 SSE 时可关闭此开关。开发包记录 ASR 返回后的情绪等待、首句、完整回复、首次发声与总耗时，日志不含对话文本。
 
-当前**没有**接入人脸检测、真实面部情绪识别、真实语音情感模型、Python 服务、摄像头、录音或模型下载。
+## 人物动画
 
-## 记忆与小车边界
+`VrmAvatarBridge` 在同一帧混合待机、聆听、思考和手势，按时间平滑切换骨骼姿势。呼吸与轻微身体摆动贯穿动作，手指保持轻度弯曲；头部和眼睛跟随视线目标，未配置目标时使用主相机。
 
-`ConversationMemory` 保存运行期上下文。`LongTermMemoryStore` 写入 `Application.persistentDataPath/avatar_long_term_memory.json`，会过滤 API Key、token、密码、手机号、邮箱和超长文本，并在重复命中时更新 `updatedAt` 后保存。说“清除记忆”会清除短期和长期记忆。
+表情渐变与眨眼、口型统一合成。口型使用 A / I / U / E / O 混合，静音时闭合。本地音频按实际音量驱动；Android TTS 将实际 PCM 音频转换为 20 ms 音量包络，在播放开始后驱动口型，并使用引擎提供的播放位置回调校准；没有音频回调时沿用节奏模拟。这是音量与停顿同步，不是逐音素口型。
 
-小车只接受固定候选意图并转换为配置中的受限 token；空/`none` 不发送，`stop` 在本地校验后优先立即发送，其他有效动作与 TTS 并行，未知或协议 token 不合法的指令明确拒绝。小车失败会立即单独反馈，不等待语音播报结束。默认 `enableCarCommunication = false`，且现有蓝牙 SPP、Android 12+ 权限、目标设备兼容性与真实 HTTP 端点均需真实设备验证。
+手臂通过上下臂骨长联合求解手腕位置，以肘部提示点确定弯曲平面。肘关节沿当前规范化 VRM 骨架的弯曲轴运动，交谈手势避免完全折叠；待机时肘部轻弯。自然播报结束后，已开始的手势可在待机中完成；停止回答或播放失败时平滑收势。切换为聆听、思考时仍收回挥手和解释等手势，短促点头可以完成。
 
-基础口型是模拟开合，并非音素级实时唇形同步。
+动画回归位于 `Assets/Tests/PlayMode/`，使用项目 VRM 模型验证手势打断、静音闭嘴、停用恢复、倾听收势、骨长及主要关节范围。设置 `SRTP_AVATAR_PREVIEW` 为输出目录可保存连续预览帧；设置 `SRTP_ANATOMY_REPORT` 可保存三视角姿势图和关节报告。运行记录见 [动画复核](Docs/AvatarMotionValidation.md)。
 
-## 开始开发
+## 配置、记忆与小车
 
-1. 使用 Unity `6000.4.6f1` 打开项目并等待导入完成。
-2. 先在 Console 确认没有脚本编译错误，再运行 EditMode 测试。
-3. 无 Key 时运行本地演示；有 Key 时通过 API 面板配置 HTTPS Base URL、模型和 Key（只保存在设备本地）。
-4. 在 Android 真机上分别验证首次麦克风授权、ASR、TTS 超时/取消，以及真实小车设备后再启用小车通信。
+API 设置保存在 `Application.persistentDataPath/deepseek_api_settings.json`。Base URL 使用 HTTPS，空值采用 `https://api.deepseek.com`；自定义域名会提示 Key 的发送目标。API Key 保存在设备本地，提交资产和文档中保持为空。
 
-## 回归清单
+`ConversationMemory` 保存会话上下文，`LongTermMemoryStore` 将长期记忆写入 `Application.persistentDataPath/avatar_long_term_memory.json`。保存前过滤 API Key、token、密码、手机号、邮箱和超长文本，重复记录更新 `updatedAt`。明确说“清除记忆”或“清空所有记忆”可清除两类记忆；“不要清除记忆”、引用和问句不会触发删除。“忘记刚才”或“重新开始对话”只清除短期对话。文件通过同目录临时文件刷新后替换，`.bak` 保存上一份有效记忆；清除时同时清空恢复副本。长期记忆支持在聊天界面的“记忆”面板逐条查看、编辑与删除；修改和删除也同步更新恢复副本。旧文件会获得条目 ID，下次成功写入升级为版本 2。
 
-- 无 Key 演示模式与有 Key 云端模式
-- 麦克风首次授权、拒绝与授权超时
-- ASR 超时、TTS 失败后的本地提示音降级
-- 非法 DeepSeek JSON、连续点击 MIC、取消/切场景
-- 清除记忆与敏感信息不过滤失败
-- 小车关闭、非法小车指令、`stop` 与普通运动指令
-- `DemoEmoService` 的稳定结果和空输入错误结果
+`carIntent` 经过本地白名单校验后转换成固定协议 token。空值和 `none` 跳过发送，`stop` 优先发送，其他有效动作与 TTS 并行。启用小车通信前，需在目标设备验证协议、蓝牙权限与连接；当前配置为 `enableCarCommunication = false`。
 
-本仓库当前尚未在此环境中完成 Unity Editor 编译、Android Gradle 构建或真机验证；请在目标 Unity 与设备环境执行上述检查。
+## 验证与回归
+
+本地 `Logs/` 已有历史 EditMode 测试与 Android 构建记录，例如 `EditMode-OnDeviceEmotion-Final.xml`（39 项通过）和 `voice-timing-android-build.log`（构建成功）。这些记录对应此前版本；当前改动按以下范围回归：
+
+- API 未配置、Key 有效、认证失败与网络超时。
+- 首次授权、拒绝授权、自动聆听、播报后恢复与切换前后台。
+- ASR 超时、TTS 失败、非法对话 JSON 与会话取消。
+- 面部和语音采集、结果时效、融合、情绪辅助回复与数字人反馈。
+- 清除记忆、重复记忆更新与敏感信息过滤。
+- 小车关闭、非法指令、`stop` 与普通动作。
+
+情绪质量按 [验收协议](Docs/EmotionQualityEvaluation.md) 在目标手机记录。局域网服务的契约测试、健康检查及 Unity 验证可通过 `Tools/Validate-EmotionPipeline.ps1` 执行；具体发布版本能力见 [演示版本索引](Releases/ReleaseIndex.md)。
+
+## 无真机对话调试
+
+在 Unity 菜单选择 **SRTP → Dialogue Workbench**，点击“打开演示场景并运行”，输入文字后发送。默认离线模拟无需手机或 API Key，回复仍经过现有流式解析、记忆、字幕与人物反馈流程。
+
+调试台提供正常回复、慢速分包、首句后断流、认证失败、超时、非法 JSON 六种情景，以及取消本轮、播放失败模拟和记忆查看。切换到“真实模型”后，使用 Game 窗口的 API 面板配置 Key；只有点击发送才会请求模型。
+
+默认播放为静音口型节奏预览；可指定一个 `AudioClip` 验证音量驱动口型，该参考音频不会随模型回复合成。模拟模式与真实模式各用独立临时记忆，重新进入 Play Mode 会新建会话。电脑预览会关闭原生设备采集和小车通信，Android 配置资产不被修改。旧动作面板默认收起，F2 可呼出。
+
+操作、测试和边界见 [电脑端调试与回归记录](Docs/DesktopDialogueWorkbench.md)。
+
+## 当前优化验证
+
+运行 `powershell -File Tools/Validate-EmotionPipeline.ps1 -SkipEmotionService` 可独立验证端侧工作流：EditMode、PlayMode、Android 开发包。局域网联调时不传 `-SkipEmotionService`；仅检查测试可加 `-SkipAndroidBuild`。
+
+普通 APK 隐藏评测面板和技术状态；Development APK 自动启用诊断和评测，构建完成后恢复项目资源配置。详细实现、测试及测量见 [本轮优化记录](Docs/ProjectOptimizationValidation.md)。
+
+## 对话界面与逐句动作
+
+运行 `DesktopAvatarDemo` 后，Game 窗口可直接输入文字、查看滚动聊天记录、停止当前回答，并重试未提交的失败或取消轮次。语音与文字使用同一个会话入口；编辑文字或打开记忆面板时暂停自动聆听。聊天界面适配横竖屏，记录保留本次运行的最近 40 轮；模型上下文仍是原有的 6 轮，两者与长期记忆分开。
+
+“记忆”面板可选中一条记录，修改后保存，或删除该条。每条最多 80 字，仍应用现有敏感信息过滤；修改在当前轮结束后进行。电脑模拟/真实模式的聊天记录和记忆互相隔离，重新进入 Play Mode 创建新的调试会话。
+
+逐句动作在播放开始时触发，使用问候、肯定、共情和解释等本地文本规则；动作间隔至少 2.5 秒，同类至少 7 秒，挥手至少 12 秒。自然句尾与冷却期间的后续句子保留正在执行的动作，让短问候的挥手完成；停止回答时平滑收势。电脑为静音/参考音频预览，手机使用系统 TTS 开始回调；这不是逐词或音素级动作标注。
+
+操作与验证见 [对话、动作和记忆功能](Docs/ConversationFeatures.md)。
+
+最新复查的四项修复及完整回归证据见 [复查修复记录](Docs/HealthFixValidation.md)。

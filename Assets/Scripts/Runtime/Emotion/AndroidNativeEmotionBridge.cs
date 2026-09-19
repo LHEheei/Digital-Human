@@ -45,7 +45,7 @@ namespace SrtpAvatar
                 var completion = new TaskCompletionSource<UserEmo>();
                 pendingRequests[requestId] = completion;
                 bridge.Call("analyzeFace", requestId, Convert.ToBase64String(image));
-                return completion.Task;
+                return AwaitNativeRequestAsync(requestId, completion, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -77,7 +77,7 @@ namespace SrtpAvatar
                 var completion = new TaskCompletionSource<UserEmo>();
                 pendingRequests[requestId] = completion;
                 voiceBridge.Call("analyzeVoice", requestId, Convert.ToBase64String(audio));
-                return completion.Task;
+                return AwaitNativeRequestAsync(requestId, completion, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -86,6 +86,20 @@ namespace SrtpAvatar
 #else
             return Task.FromResult(UserEmo.Failure("voice", "手机端语音情绪分析仅支持 Android 真机。"));
 #endif
+        }
+
+        private async Task<UserEmo> AwaitNativeRequestAsync(string requestId, TaskCompletionSource<UserEmo> completion,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await TaskTimeout.WithTimeout(completion.Task, 10f, "手机端情绪分析超时。", cancellationToken: cancellationToken);
+            }
+            finally
+            {
+                pendingRequests.Remove(requestId);
+                completion.TrySetCanceled();
+            }
         }
 
         public Task<UserEmo> GetFusionAsync(UserEmo face, UserEmo voice, CancellationToken cancellationToken)
@@ -153,12 +167,10 @@ namespace SrtpAvatar
         }
         private void OnDestroy()
         {
-            foreach (var pending in pendingRequests.Values)
-            {
-                pending.TrySetCanceled();
-            }
-
+            // Cancellation may synchronously run AwaitNativeRequestAsync's finally.
+            var completions = new List<TaskCompletionSource<UserEmo>>(pendingRequests.Values);
             pendingRequests.Clear();
+            foreach (var pending in completions) pending.TrySetCanceled();
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (bridge != null)
             {

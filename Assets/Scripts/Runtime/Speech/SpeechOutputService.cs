@@ -25,6 +25,7 @@ namespace SrtpAvatar
                 throw new AppException(AppErr.tts, "当前环境没有可用的 Android 系统 TTS。");
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var timeout = ResolveTtsTimeout(reply);
             try
             {
@@ -32,6 +33,7 @@ namespace SrtpAvatar
             }
             catch (OperationCanceledException)
             {
+                androidSpeech.StopSpeaking();
                 throw;
             }
             catch (Exception ex)

@@ -8,7 +8,7 @@ using UnityEngine.Networking;
 
 namespace SrtpAvatar
 {
-    public sealed class DeepSeekDialogueClient
+    public sealed class DeepSeekDialogueClient : IDialogueClient
     {
         private readonly AppConfig config;
 
@@ -17,7 +17,9 @@ namespace SrtpAvatar
             this.config = config;
         }
 
-        public async Task<DialogueDecision> CompleteAsync(TalkInput input, string recentContext, string longTermContext, CancellationToken cancellationToken)
+        public bool IsAvailable => config.HasDeepSeekKey;
+
+        public async Task<DialogueDecision> CompleteAsync(TalkInput input, string recentContext, string longTermContext, CancellationToken cancellationToken, Action<string> onReplySentence = null)
         {
             var apiKey = RuntimeSecrets.ResolveDeepSeekApiKey(config);
             if (string.IsNullOrWhiteSpace(apiKey))
@@ -40,7 +42,7 @@ namespace SrtpAvatar
                 new ChatMessage
                 {
                     role = "system",
-                    content = DialoguePrompt.SystemPrompt + " 输入可能包含低风险情绪辅助信息；可据此温和调整语气、表情和动作。整体情绪置信度较高时，可以适度地以“听起来你可能有点累”这类自然说法表达理解。严禁提及或暗示摄像头、镜头、麦克风、语音分析、表情分析、算法、模型、识别、检测或任何技术来源。"
+                    content = DialoguePrompt.SystemPrompt
                 }
             };
 
@@ -66,6 +68,7 @@ namespace SrtpAvatar
             var requestBody = new ChatCompletionRequest
             {
                 model = RuntimeSecrets.ResolveDeepSeekModel(config),
+                stream = onReplySentence != null,
                 temperature = 0.7f,
                 // A mobile avatar needs a prompt reply, not a long chain of thought.
                 // DeepSeek V4 enables thinking by default, which can delay the first
@@ -78,20 +81,26 @@ namespace SrtpAvatar
 
             using var request = new UnityWebRequest(RuntimeSecrets.DeepSeekChatCompletionUrl(baseUrl), UnityWebRequest.kHttpVerbPOST);
             request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(JsonUtility.ToJson(requestBody)));
-            request.downloadHandler = new DownloadHandlerBuffer();
+            var stream = onReplySentence == null ? null : new DialogueStreamDecoder(onReplySentence);
+            var streamHandler = stream == null ? null : new DialogueStreamDownloadHandler(stream);
+            request.downloadHandler = streamHandler == null ? (DownloadHandler)new DownloadHandlerBuffer() : streamHandler;
             request.SetRequestHeader("Content-Type", "application/json");
             request.SetRequestHeader("Authorization", $"Bearer {apiKey}");
-            await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds(), AppErr.network, true, cancellationToken);
-
-            cancellationToken.ThrowIfCancellationRequested();
-            var response = JsonUtility.FromJson<ChatCompletionResponse>(request.downloadHandler.text);
-            var content = ExtractFirstResponseContent(response);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!DialogueParser.TryFromPossiblyWrappedJson(content, out var decision))
+            try
             {
-                throw new AppException(AppErr.badJson, "DeepSeek 返回的 JSON 格式无效或内容为空。");
+                await UnityWebRequestUtil.SendAsync(request, ResolveTimeoutSeconds(), AppErr.network, true, cancellationToken);
+            }
+            catch (AppException) when (streamHandler?.Failure != null)
+            {
+                throw new AppException(AppErr.badJson, "流式回复解析失败。", streamHandler.Failure);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+            if (stream != null) return stream.CompleteDecision();
+            var response = JsonUtility.FromJson<ChatCompletionResponse>(request.downloadHandler.text);
+            var content = ExtractFirstResponseContent(response);
+            if (!DialogueParser.TryFromPossiblyWrappedJson(content, out var decision))
+                throw new AppException(AppErr.badJson, "DeepSeek 返回的 JSON 格式无效或内容为空。");
             cancellationToken.ThrowIfCancellationRequested();
             return decision;
         }
@@ -116,6 +125,7 @@ namespace SrtpAvatar
         private sealed class ChatCompletionRequest
         {
             public string model;
+            public bool stream;
             public ChatMessage[] messages;
             public float temperature;
             public ThinkingOption thinking;

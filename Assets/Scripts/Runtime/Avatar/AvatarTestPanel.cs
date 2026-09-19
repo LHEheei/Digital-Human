@@ -44,6 +44,12 @@ namespace SrtpAvatar
             }
         }
 
+        public void SetVisible(bool visible)
+        {
+            showOnStart = visible;
+            if (panelRoot != null) panelRoot.SetActive(visible);
+        }
+
         public void Bind(DigitalHumanAvatarBase driver, AudioSource source)
         {
             avatarDriver = driver;

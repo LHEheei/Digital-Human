@@ -14,6 +14,9 @@ namespace SrtpAvatar
         private byte[] recognitionAudioWav;
         private string utteranceId;
         private bool ttsSpeaking;
+        private readonly TtsMouthTimeline mouthTimeline = new TtsMouthTimeline();
+        public event Action TtsStarted;
+        public bool TryGetSpeechLevel(out float level) => mouthTimeline.TrySample(Time.realtimeSinceStartupAsDouble, out level);
 
 #if UNITY_ANDROID && !UNITY_EDITOR
         private AndroidJavaObject bridge;
@@ -109,6 +112,7 @@ namespace SrtpAvatar
             ttsCompletion = null;
             utteranceId = null;
             ttsSpeaking = false;
+            mouthTimeline.Reset();
             completion?.TrySetCanceled();
 #if UNITY_ANDROID && !UNITY_EDITOR
             if (bridge != null)
@@ -170,7 +174,31 @@ namespace SrtpAvatar
             if (TryReadCallback(callback, utteranceId, out _))
             {
                 ttsSpeaking = true;
+                mouthTimeline.Start(Time.realtimeSinceStartupAsDouble);
+                TtsStarted?.Invoke();
             }
+        }
+
+        public void OnAndroidTtsEnvelope(string callback)
+        {
+            if (!TryReadCallback(callback, utteranceId, out var payload)) return;
+            var chunk = JsonUtility.FromJson<EnvelopeChunk>(payload);
+            if (chunk != null) mouthTimeline.Append(chunk.startIndex, chunk.stepSeconds, chunk.levels);
+        }
+
+        public void OnAndroidTtsPlaybackPosition(string callback)
+        {
+            if (!TryReadCallback(callback, utteranceId, out var payload)) return;
+            if (float.TryParse(payload, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+                mouthTimeline.Align(Time.realtimeSinceStartupAsDouble, seconds);
+        }
+
+        [Serializable]
+        private sealed class EnvelopeChunk
+        {
+            public int startIndex;
+            public float stepSeconds;
+            public float[] levels;
         }
 
         public void OnAndroidTtsDone(string callback)
@@ -220,6 +248,7 @@ namespace SrtpAvatar
             ttsCompletion = null;
             utteranceId = null;
             ttsSpeaking = false;
+            mouthTimeline.Reset();
             if (completion == null)
             {
                 return;

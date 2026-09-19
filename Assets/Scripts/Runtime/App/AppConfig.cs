@@ -10,6 +10,11 @@ namespace SrtpAvatar
         public string deepSeekApiKey = "";
         public string deepSeekModel = "deepseek-v4-flash";
         public int deepSeekRequestTimeoutSeconds = 25;
+        [Tooltip("按句接收并播报回复；兼容服务不支持 SSE 时可关闭。")]
+        public bool enableStreamingReplies = true;
+        [Header("Diagnostics")]
+        public bool enableDiagnostics = false;
+        public bool ShowDiagnostics => enableDiagnostics && (Application.isEditor || Debug.isDebugBuild);
 
         [Header("Conversation Memory")]
         public bool enableConversationMemory = true;

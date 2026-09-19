@@ -21,6 +21,12 @@ namespace SrtpAvatar
         private FaceEmotionTemporalFilter nativeFaceFilter;
         private CancellationTokenSource lifetimeCancellation;
         private WebCamTexture cameraTexture;
+        private Texture2D captureTexture;
+        private Color32[] cameraPixels;
+        private Color32[] orientedPixels;
+        private float[] microphoneSamples;
+        private float averageFrameSeconds;
+        private bool applicationPaused;
         private RawImage cameraPreview;
         private int previewRotationAngle = int.MinValue;
         private bool previewVerticallyMirrored;
@@ -116,9 +122,10 @@ namespace SrtpAvatar
                 return;
             }
 
+            averageFrameSeconds = Mathf.Lerp(averageFrameSeconds, Time.unscaledDeltaTime, 0.05f);
             var now = Time.unscaledTime;
             RefreshCameraPreviewTransform();
-            if (SupportsFaceCapture && !faceRequestInFlight && EmotionSamplingPolicy.IsDue(now, lastFaceSampleAt, config.emotionCameraSampleIntervalSeconds))
+            if (SupportsFaceCapture && cameraTexture != null && cameraTexture.didUpdateThisFrame && !faceRequestInFlight && EmotionSamplingPolicy.IsDue(now, lastFaceSampleAt, EmotionSamplingPolicy.FaceInterval(config.emotionCameraSampleIntervalSeconds, averageFrameSeconds)))
             {
                 lastFaceSampleAt = now;
                 _ = CaptureFaceAsync(lifetimeCancellation.Token);
@@ -136,6 +143,13 @@ namespace SrtpAvatar
             StopCapture();
         }
 
+        private void OnApplicationPause(bool paused)
+        {
+            applicationPaused = paused;
+            if (paused) StopCapture();
+            else if (initialized && isActiveAndEnabled && IsPerceptionEnabled) StartCapture();
+        }
+
         private void OnDestroy()
         {
             StopCapture();
@@ -143,7 +157,7 @@ namespace SrtpAvatar
 
         private void StartCapture()
         {
-            if (lifetimeCancellation != null || !IsPerceptionEnabled)
+            if (lifetimeCancellation != null || !IsPerceptionEnabled || applicationPaused)
             {
                 return;
             }
@@ -252,6 +266,7 @@ namespace SrtpAvatar
 
         private void StartMicrophone()
         {
+            if (audioCaptureSuspended || applicationPaused) return;
             var devices = Microphone.devices;
             microphoneDevice = devices != null && devices.Length > 0 ? devices[0] : null;
             if (microphoneDevice == null)
@@ -276,6 +291,7 @@ namespace SrtpAvatar
                 }
 
                 var rawResult = await emotionService.GetFaceAsync(jpeg, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 var result = rawResult;
                 if (rawResult.IsUsable && nativeFaceFilter != null)
                 {
@@ -320,7 +336,7 @@ namespace SrtpAvatar
 
         public async Task AnalyzeSpeechTurnAsync(byte[] wav, string transcript, CancellationToken cancellationToken)
         {
-            if (!UsesSpeechTurnVoiceCapture || wav == null || wav.Length == 0 || voiceRequestInFlight)
+            if (!IsPerceptionEnabled || !UsesSpeechTurnVoiceCapture || wav == null || wav.Length == 0 || voiceRequestInFlight)
             {
                 return;
             }
@@ -329,6 +345,7 @@ namespace SrtpAvatar
             try
             {
                 var rawResult = await emotionService.GetVoiceAsync(wav, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 var calibrated = VoiceEmotionCalibrationPolicy.Calibrate(rawResult, transcript, FaceEmotion, EmotionTime.UtcNowUnixMs);
                 await ApplyVoiceResultAsync(calibrated, cancellationToken);
             }
@@ -360,6 +377,7 @@ namespace SrtpAvatar
                 }
 
                 var rawResult = await emotionService.GetVoiceAsync(wav, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 var calibrated = VoiceEmotionCalibrationPolicy.Calibrate(rawResult, string.Empty, FaceEmotion, EmotionTime.UtcNowUnixMs);
                 await ApplyVoiceResultAsync(calibrated, cancellationToken);
             }
@@ -446,35 +464,22 @@ namespace SrtpAvatar
                 return null;
             }
 
-            Texture2D output = null;
-            try
+            if (!cameraTexture.didUpdateThisFrame) return null;
+            if (cameraPixels == null || cameraPixels.Length != cameraTexture.width * cameraTexture.height)
+                cameraPixels = new Color32[cameraTexture.width * cameraTexture.height];
+            cameraTexture.GetPixels32(cameraPixels);
+            CameraFrameTransform.OrientAndScale(cameraPixels, cameraTexture.width, cameraTexture.height,
+                cameraTexture.videoRotationAngle, cameraTexture.videoVerticallyMirrored, CameraMaximumDimension,
+                ref orientedPixels, out var targetWidth, out var targetHeight);
+            if (orientedPixels.Length == 0) return null;
+            if (captureTexture == null || captureTexture.width != targetWidth || captureTexture.height != targetHeight)
             {
-                var pixels = CameraFrameTransform.OrientAndScale(
-                    cameraTexture.GetPixels32(),
-                    cameraTexture.width,
-                    cameraTexture.height,
-                    cameraTexture.videoRotationAngle,
-                    cameraTexture.videoVerticallyMirrored,
-                    CameraMaximumDimension,
-                    out var targetWidth,
-                    out var targetHeight);
-                if (pixels.Length == 0)
-                {
-                    return null;
-                }
-
-                output = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
-                output.SetPixels32(pixels);
-                output.Apply(false, false);
-                return output.EncodeToJPG(CameraJpegQuality);
+                if (captureTexture != null) Destroy(captureTexture);
+                captureTexture = new Texture2D(targetWidth, targetHeight, TextureFormat.RGB24, false);
             }
-            finally
-            {
-                if (output != null)
-                {
-                    Destroy(output);
-                }
-            }
+            captureTexture.SetPixels32(orientedPixels);
+            // CPU encoding does not need a GPU texture upload.
+            return captureTexture.EncodeToJPG(CameraJpegQuality);
         }
 
         private byte[] CaptureLatestWav()
@@ -496,18 +501,24 @@ namespace SrtpAvatar
                 return null;
             }
 
-            var interleaved = new float[microphoneClip.samples * microphoneClip.channels];
-            if (!microphoneClip.GetData(interleaved, 0))
+            var sampleCount = microphoneClip.samples * microphoneClip.channels;
+            if (microphoneSamples == null || microphoneSamples.Length != sampleCount) microphoneSamples = new float[sampleCount];
+            if (!microphoneClip.GetData(microphoneSamples, 0))
             {
                 return null;
             }
 
-            return Pcm16Wav.EncodeMono(Pcm16Wav.ExtractLatestMono(interleaved, microphoneClip.channels, position, requestedFrames), VoiceSampleRate);
+            return Pcm16Wav.EncodeMono(Pcm16Wav.ExtractLatestMono(microphoneSamples, microphoneClip.channels, position, requestedFrames), VoiceSampleRate);
         }
 
         private void StopCapture()
         {
             captureReady = false;
+            if (captureTexture != null) Destroy(captureTexture);
+            captureTexture = null;
+            cameraPixels = orientedPixels = null;
+            microphoneSamples = null;
+            averageFrameSeconds = 0f;
             lifetimeCancellation?.Cancel();
             lifetimeCancellation?.Dispose();
             lifetimeCancellation = null;

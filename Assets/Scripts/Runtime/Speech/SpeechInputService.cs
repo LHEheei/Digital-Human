@@ -20,12 +20,13 @@ namespace SrtpAvatar
 
         public bool CanRecognize => config.preferAndroidNativeSpeech && androidSpeech.CanRecognize;
 
-        public async Task<SpeechRecognitionTurn> ListenForUserTurnAsync(Action<string> reportSubtitle, CancellationToken cancellationToken)
+        public async Task<SpeechRecognitionTurn> ListenForUserTurnAsync(Action<string> reportSubtitle, CancellationToken cancellationToken, Action onReady = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (CanRecognize)
             {
                 var permission = await microphonePermission.RequestAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (permission != PermState.granted)
                 {
                     throw new AppException(AppErr.micPerm, PermissionMessage(permission));
@@ -40,7 +41,12 @@ namespace SrtpAvatar
                         androidSpeech.RecognizeAsync(
                             config.speechLanguage,
                             config.preferOnDeviceSpeechRecognition,
-                            () => reportSubtitle?.Invoke("正在聆听，请说话")),
+                            () =>
+                            {
+                                if (cancellationToken.IsCancellationRequested) return;
+                                reportSubtitle?.Invoke("正在聆听，请说话");
+                                onReady?.Invoke();
+                            }),
                         timeout,
                         "系统语音识别超时。",
                         androidSpeech.CancelRecognition,

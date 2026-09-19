@@ -17,6 +17,8 @@ namespace SrtpAvatar.Tests
             {
                 File.Delete(memoryFilePath);
             }
+            if (!string.IsNullOrWhiteSpace(memoryFilePath))
+                foreach (var suffix in new[] { ".bak", ".tmp", ".bak.tmp" }) File.Delete(memoryFilePath + suffix);
         }
 
         [Test]
@@ -49,9 +51,63 @@ namespace SrtpAvatar.Tests
         [TestCase("{\"emotion\":\"joy\"}")]
         [TestCase("not-json")]
         [TestCase("")]
+        [TestCase("{\"metadata\":{\"reply\":\"你好\"}}")]
+        [TestCase("{\"emotion\":\"reply\"}")]
+        [TestCase("{\"reply\":null}")]
+        [TestCase("{\"reply\":\"  \"}")]
         public void DialogueParser_RejectsMissingReplyOrInvalidJson(string raw)
         {
             Assert.IsFalse(DialogueParser.TryFromPossiblyWrappedJson(raw, out _));
+        }
+
+        [Test]
+        public void DialogueParser_PreservesReplyContent()
+        {
+            const string raw = "{\"reply\":\"请保留 ```json 标记。\"}";
+
+            Assert.IsTrue(DialogueParser.TryFromPossiblyWrappedJson(raw, out var decision));
+            Assert.AreEqual("请保留 ```json 标记。", decision.reply);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void LongTermMemoryStore_WriteFailurePreservesSavedState(bool clear)
+        {
+            memoryFilePath = Path.Combine(Path.GetTempPath(), "srtp-memory-" + Guid.NewGuid().ToString("N") + ".json");
+            var store = new LongTermMemoryStore(memoryFilePath);
+            Assert.IsTrue(store.Remember("第一条", 2));
+
+            using (var fileLock = new FileStream(memoryFilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                var error = Assert.Throws<AppException>(() =>
+                {
+                    if (clear)
+                    {
+                        store.Clear();
+                    }
+                    else
+                    {
+                        store.Remember("第二条", 2);
+                    }
+                });
+                Assert.AreEqual(AppErr.memory, error.Error);
+                Assert.IsNotNull(error.InnerException);
+                Assert.AreEqual(1, store.Count);
+                StringAssert.Contains("第一条", store.BuildContext(2));
+                StringAssert.DoesNotContain("第二条", store.BuildContext(2));
+            }
+
+            Assert.AreEqual(1, new LongTermMemoryStore(memoryFilePath).Count);
+            if (clear)
+            {
+                store.Clear();
+                Assert.AreEqual(0, new LongTermMemoryStore(memoryFilePath).Count);
+            }
+            else
+            {
+                Assert.IsTrue(store.Remember("第二条", 2));
+                Assert.AreEqual(2, new LongTermMemoryStore(memoryFilePath).Count);
+            }
         }
 
         [Test]
@@ -78,7 +134,7 @@ namespace SrtpAvatar.Tests
 
             File.WriteAllText(memoryFilePath, "{broken");
             var recovered = new LongTermMemoryStore(memoryFilePath);
-            Assert.AreEqual(0, recovered.Count);
+            Assert.AreEqual(2, recovered.Count);
         }
 
         [TestCase("https://api.deepseek.com", true, "https://api.deepseek.com")]
@@ -278,12 +334,12 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
-        public void EmotionResponsePolicy_AppliesOnlyConfidentFusionResult()
+        public void EmotionResponsePolicy_PreservesReplyExpressionInsteadOfMirroringUser()
         {
             var decision = new DialogueDecision { emotion = "neutral", gesture = "none" };
             var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .7f, source = "fusion" });
-            Assert.AreEqual("sorrow", applied.emotion);
-            Assert.AreEqual("nod", applied.gesture);
+            Assert.AreEqual("neutral", applied.emotion);
+            Assert.AreEqual("none", applied.gesture);
             Assert.AreEqual("好的，我在。", applied.reply);
 
             var lowConfidence = EmotionResponsePolicy.Apply(new DialogueDecision { emotion = "joy" }, new UserEmo { label = "angry", score = .4f, source = "fusion" });
@@ -310,7 +366,7 @@ namespace SrtpAvatar.Tests
             var decision = new DialogueDecision { reply = "我通过摄像头识别出你很难过。", gesture = "none" };
             var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .9f, source = "fusion" });
 
-            Assert.AreEqual("我可能理解得不完全准确，但愿意听你多说一点。", applied.reply);
+            Assert.AreEqual("愿意和我多说一点吗？", applied.reply);
         }
 
         [Test]

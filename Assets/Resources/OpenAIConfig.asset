@@ -16,6 +16,8 @@ MonoBehaviour:
   deepSeekApiKey:
   deepSeekModel: deepseek-v4-flash
   deepSeekRequestTimeoutSeconds: 25
+  enableStreamingReplies: 1
+  enableDiagnostics: 0
   enableConversationMemory: 1
   maxMemoryTurns: 6
   enableLongTermMemory: 1
@@ -36,7 +38,7 @@ MonoBehaviour:
   emotionVoiceWindowSeconds: 4
   preferFrontEmotionCamera: 1
   showEmotionCameraPreview: 0
-  enableEmotionEvaluationPanel: 1
+  enableEmotionEvaluationPanel: 0
   enableCarCommunication: 0
   carCommunicationMode: 1
   carHttpEndpoint:

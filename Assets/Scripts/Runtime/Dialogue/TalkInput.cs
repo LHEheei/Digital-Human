@@ -36,7 +36,7 @@ namespace SrtpAvatar
                 return;
             }
 
-            builder.Append(label).Append('：').Append(emotion.label).Append("，置信度 ").Append(emotion.score.ToString("0.00")).AppendLine("。识别可能不准确，仅作低风险辅助上下文；不要逐字向用户复述，也不要声称已识别用户情绪，更不要据低置信度做强烈判断。");
+            builder.Append(label).Append('：').Append(emotion.label).Append("，置信度 ").Append(emotion.score.ToString("0.00")).AppendLine("。");
         }
     }
 }

@@ -1,4 +1,3 @@
-using System.Collections;
 using UnityEngine;
 using VRM;
 
@@ -21,7 +20,35 @@ namespace SrtpAvatar
         private float nextBlinkTime;
         private float blinkElapsed;
         private bool blinking;
-        private Coroutine gestureRoutine;
+        private AvatarGesture activeGesture;
+        private bool completeGestureNaturally;
+        private float gestureElapsed;
+        private float gestureDuration;
+        private float listeningWeight;
+        private float thinkingWeight;
+        private float speakingWeight;
+        private float motionTime;
+        private float motionPhase;
+        private float blinkDuration = 0.2f;
+        private bool doubleBlink;
+        private Vector2 gazeOffset;
+        private Vector2 gazeTarget;
+        private float nextGazeTime;
+        private Transform[] poseBones;
+        private Quaternion[] displayedPose;
+        private VRMLookAtHead eyeLook;
+        private UpdateType previousLookUpdate;
+        private Transform previousLookTarget;
+        private FingerJoint[] fingers;
+
+        private sealed class FingerJoint
+        {
+            public Transform bone;
+            public Quaternion rest;
+            public Quaternion displayed;
+            public float curl;
+            public bool right;
+        }
         private Transform head;
         private Transform chest;
         private Transform leftUpperArm;
@@ -57,7 +84,25 @@ namespace SrtpAvatar
                 blendShapeProxy = GetComponentInChildren<VRMBlendShapeProxy>();
             }
 
+            if (lookTarget == null && Camera.main != null)
+            {
+                lookTarget = Camera.main.transform;
+            }
+            eyeLook = GetComponentInChildren<VRMLookAtHead>();
+            if (eyeLook != null)
+            {
+                previousLookUpdate = eyeLook.UpdateType;
+                previousLookTarget = eyeLook.Target;
+            }
+
             CacheBones();
+            CachePose();
+            motionPhase = Random.Range(0f, 20f);
+            ApplyStatePose();
+            for (var i = 0; i < poseBones.Length; i++)
+            {
+                if (poseBones[i] != null) displayedPose[i] = poseBones[i].localRotation;
+            }
             SetEmotionTargets(AvatarEmotion.neutral);
             emotionWeights[(int)AvatarEmotion.neutral] = 1f;
             ScheduleNextBlink();
@@ -79,23 +124,65 @@ namespace SrtpAvatar
             blinkIntervalRange.y = Mathf.Max(blinkIntervalRange.x, blinkIntervalRange.y);
         }
 
+        private void OnEnable()
+        {
+            activeGesture = AvatarGesture.none;
+            completeGestureNaturally = false;
+            ScheduleNextBlink();
+            if (eyeLook != null && lookTarget != null)
+            {
+                eyeLook.Target = lookTarget;
+                eyeLook.UpdateType = UpdateType.None;
+            }
+        }
+
+        private void OnDisable()
+        {
+            activeGesture = AvatarGesture.none;
+            completeGestureNaturally = false;
+            speechLevel = smoothedSpeechLevel = 0f;
+            state = AvatarState.idle;
+            if (eyeLook != null)
+            {
+                eyeLook.Target = previousLookTarget;
+                eyeLook.UpdateType = previousLookUpdate;
+            }
+            ApplyMouth();
+            SetPreset(BlendShapePreset.Blink, 0f);
+            if (blendShapeProxy != null) blendShapeProxy.Apply();
+        }
+
         private void LateUpdate()
         {
-            var idle = Mathf.Sin(Time.time * 1.2f);
-            var breathe = Mathf.Sin(Time.time * 1.5f);
-            if (gestureRoutine == null)
-            {
-                ApplyStatePose(idle, breathe);
-            }
+            var dt = Time.deltaTime;
+            motionTime += dt;
+            var stateBlend = Damp(5f, dt);
+            listeningWeight = Mathf.Lerp(listeningWeight, state == AvatarState.listening ? 1f : 0f, stateBlend);
+            thinkingWeight = Mathf.Lerp(thinkingWeight, state == AvatarState.thinking ? 1f : 0f, stateBlend);
+            speakingWeight = Mathf.Lerp(speakingWeight, state == AvatarState.speaking ? 1f : 0f, stateBlend);
+
+            UpdateGaze(dt);
+            ApplyStatePose();
+            ApplyGesture(dt);
+            SmoothPose(dt);
+            ApplyFingers(dt);
+            if (eyeLook != null && lookTarget != null) eyeLook.LookWorldPosition();
 
             UpdateEmotionWeights();
             UpdateBlink();
             ApplyEmotionBlendShapes();
             ApplyMouth();
+            if (blendShapeProxy != null) blendShapeProxy.Apply();
         }
 
         public override void SetState(AvatarState next)
         {
+            if (state != next && next != AvatarState.speaking && activeGesture != AvatarGesture.nod &&
+                !(next == AvatarState.idle && completeGestureNaturally))
+            {
+                // The displayed pose blends back through SmoothPose; do not reset the bones here.
+                activeGesture = AvatarGesture.none;
+            }
             state = next;
         }
 
@@ -111,16 +198,15 @@ namespace SrtpAvatar
 
         public override void PlayGesture(AvatarGesture gesture)
         {
-            if (gestureRoutine != null)
-            {
-                StopCoroutine(gestureRoutine);
-                ApplyStatePose(0f, 0f);
-            }
+            activeGesture = gesture;
+            completeGestureNaturally = false;
+            gestureElapsed = 0f;
+            gestureDuration = gesture == AvatarGesture.nod ? 1.15f : gesture == AvatarGesture.wave ? 2.65f : 2.4f;
+        }
 
-            if (gesture != AvatarGesture.none)
-            {
-                gestureRoutine = StartCoroutine(PlayGestureRoutine(gesture));
-            }
+        public override void FinishGesture()
+        {
+            completeGestureNaturally = activeGesture != AvatarGesture.none;
         }
 
         public void BindAudioSource(AudioSource source)
@@ -128,116 +214,56 @@ namespace SrtpAvatar
             speechAudio = source;
         }
 
-        private IEnumerator PlayGestureRoutine(AvatarGesture gesture)
+        private void ApplyGesture(float dt)
         {
-            switch (gesture)
+            if (activeGesture == AvatarGesture.none) return;
+            gestureElapsed += dt;
+            var t = Mathf.Clamp01(gestureElapsed / gestureDuration);
+            var weight = GestureWeight();
+            switch (activeGesture)
             {
                 case AvatarGesture.nod:
-                    yield return Nod();
+                    // One clear acknowledgment with a smaller recovery, rather than a repeated oscillation.
+                    var down = Mathf.Sin(Mathf.PI * Mathf.Clamp01(t / 0.65f));
+                    var recovery = Mathf.Sin(Mathf.PI * Mathf.Clamp01((t - 0.65f) / 0.35f));
+                    if (head != null) head.localRotation *= Quaternion.Euler(down * 7f - recovery * 1.8f, 0f, down * 0.5f);
                     break;
                 case AvatarGesture.wave:
-                    yield return Wave();
+                    var waveTime = Mathf.Max(0f, gestureElapsed - 0.5f);
+                    ApplyWavePose(weight, Mathf.Sin(waveTime * 10f) * Mathf.SmoothStep(0f, 1f, waveTime / 0.25f));
                     break;
                 case AvatarGesture.think:
-                    yield return Think();
+                    ApplyThinkPose(weight, Mathf.Sin(motionTime * 1.1f) * 0.12f);
                     break;
                 case AvatarGesture.explain:
-                    yield return Explain();
+                    ApplyExplainPose(weight, Mathf.Sin(gestureElapsed * 4.5f) * 0.22f);
                     break;
             }
-
-            yield return ReturnUpperBodyToBase(0.35f);
-            gestureRoutine = null;
-        }
-
-        private IEnumerator Nod()
-        {
-            const float duration = 1.55f;
-            var elapsed = 0f;
-            while (elapsed < duration)
+            if (gestureElapsed >= gestureDuration)
             {
-                elapsed += Time.deltaTime;
-                var normalized = Mathf.Clamp01(elapsed / duration);
-                var phase = Mathf.Sin(EaseInOut(normalized) * Mathf.PI * 4f);
-                if (head != null)
-                {
-                    head.localRotation = headBase * Quaternion.Euler(phase * 9f, 0f, 0f);
-                }
-
-                yield return null;
+                activeGesture = AvatarGesture.none;
+                completeGestureNaturally = false;
             }
         }
 
-        private IEnumerator Wave()
+        private float GestureWeight()
         {
-            const float raiseDuration = 0.55f;
-            const float waveDuration = 1.75f;
-            var elapsed = 0f;
-
-            while (elapsed < raiseDuration)
-            {
-                elapsed += Time.deltaTime;
-                var t = EaseInOut(Mathf.Clamp01(elapsed / raiseDuration));
-                ApplyWavePose(t, 0f);
-                yield return null;
-            }
-
-            elapsed = 0f;
-            while (elapsed < waveDuration)
-            {
-                elapsed += Time.deltaTime;
-                var normalized = Mathf.Clamp01(elapsed / waveDuration);
-                var phase = Mathf.Sin(normalized * Mathf.PI * 6f);
-                ApplyWavePose(1f, phase);
-                yield return null;
-            }
-        }
-
-        private IEnumerator Think()
-        {
-            const float duration = 2.05f;
-            var elapsed = 0f;
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                var normalized = Mathf.Clamp01(elapsed / duration);
-                var enter = EaseInOut(Mathf.Clamp01(elapsed / 0.55f));
-                var pulse = Mathf.Sin(normalized * Mathf.PI * 2f) * 0.35f;
-                ApplyThinkPose(enter, pulse);
-                yield return null;
-            }
-        }
-
-        private IEnumerator Explain()
-        {
-            const float duration = 2.15f;
-            var elapsed = 0f;
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                var normalized = Mathf.Clamp01(elapsed / duration);
-                var open = EaseInOut(Mathf.Clamp01(Mathf.Sin(normalized * Mathf.PI)));
-                var beat = Mathf.Sin(normalized * Mathf.PI * 4f) * 0.35f;
-                ApplyExplainPose(open, beat);
-
-                yield return null;
-            }
+            if (activeGesture == AvatarGesture.none) return 0f;
+            return Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(gestureElapsed / 0.55f))
+                * Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((gestureDuration - gestureElapsed) / 0.7f));
         }
 
         private void ApplyWavePose(float blend, float wave)
         {
-            ResetUpperBodyForGesture(0.45f * blend, -1.2f * blend, 0.8f * blend);
+            AddChestGesture(0.45f * blend, -1.2f * blend, 0.8f * blend);
 
             var right = BodyRight();
             var up = BodyUp();
             var forward = BodyForward();
             var chestPos = ChestPosition();
             var headPos = HeadPosition();
-            var elbowTarget = chestPos + right * 0.18f - up * 0.17f + forward * 0.09f;
-            var handTarget = Vector3.Lerp(
-                chestPos + right * 0.23f + up * 0.06f + forward * 0.10f,
-                headPos + right * 0.16f - up * 0.07f + forward * 0.08f,
-                0.65f);
+            var elbowTarget = chestPos + right * 0.20f - up * 0.10f + forward * 0.07f;
+            var handTarget = headPos + right * 0.20f - up * 0.14f + forward * 0.15f;
 
             handTarget += right * (wave * 0.035f) + up * (Mathf.Abs(wave) * 0.01f);
 
@@ -245,9 +271,6 @@ namespace SrtpAvatar
                 rightUpperArm,
                 rightLowerArm,
                 rightHand,
-                rightUpperArmBase,
-                rightLowerArmBase,
-                rightHandBase,
                 elbowTarget,
                 handTarget,
                 blend,
@@ -256,11 +279,11 @@ namespace SrtpAvatar
 
         private void ApplyThinkPose(float blend, float pulse)
         {
-            ResetUpperBodyForGesture(1.2f * blend, -4.5f * blend, 2f * blend);
+            AddChestGesture(1.2f * blend, -4.5f * blend, 2f * blend);
 
             if (head != null)
             {
-                head.localRotation = headBase * Quaternion.Euler(4.5f * blend + pulse, -7f * blend, 2.5f * blend);
+                head.localRotation *= Quaternion.Euler(3f * blend + pulse * blend, -4f * blend, 2f * blend);
             }
 
             var right = BodyRight();
@@ -268,11 +291,8 @@ namespace SrtpAvatar
             var forward = BodyForward();
             var chestPos = ChestPosition();
             var headPos = HeadPosition();
-            var elbowTarget = chestPos + right * 0.15f - up * 0.18f + forward * 0.05f;
-            var handTarget = Vector3.Lerp(
-                chestPos + right * 0.11f - up * 0.02f + forward * 0.08f,
-                headPos + right * 0.10f - up * 0.18f + forward * 0.04f,
-                0.55f);
+            var elbowTarget = chestPos + right * 0.17f - up * 0.10f + forward * 0.08f;
+            var handTarget = headPos + right * 0.09f - up * 0.13f + forward * 0.18f;
 
             handTarget += right * (pulse * 0.008f);
 
@@ -280,9 +300,6 @@ namespace SrtpAvatar
                 rightUpperArm,
                 rightLowerArm,
                 rightHand,
-                rightUpperArmBase,
-                rightLowerArmBase,
-                rightHandBase,
                 elbowTarget,
                 handTarget,
                 blend,
@@ -292,11 +309,11 @@ namespace SrtpAvatar
         private void ApplyExplainPose(float open, float beat)
         {
             var blend = Mathf.Clamp01(open);
-            ResetUpperBodyForGesture(0.9f * blend + beat * 0.25f, 0f, 0f);
+            AddChestGesture(0.9f * blend + beat * 0.25f, 0f, 0f);
 
             if (head != null)
             {
-                head.localRotation = headBase * Quaternion.Euler(1.1f * blend, beat * 1.2f, 0f);
+                head.localRotation *= Quaternion.Euler(0.8f * blend, beat * blend, 0f);
             }
 
             var right = BodyRight();
@@ -308,16 +325,13 @@ namespace SrtpAvatar
 
             var rightElbow = rightShoulderPos + right * 0.08f - up * 0.17f + forward * 0.08f;
             var leftElbow = leftShoulderPos - right * 0.08f - up * 0.17f + forward * 0.08f;
-            var rightHandTarget = chestPos + right * (0.11f + blend * 0.11f) - up * 0.15f + forward * (0.12f + beat * 0.018f);
-            var leftHandTarget = chestPos - right * (0.11f + blend * 0.11f) - up * 0.15f + forward * (0.12f - beat * 0.018f);
+            var rightHandTarget = chestPos + right * (0.11f + blend * 0.11f) - up * 0.02f + forward * (0.26f + beat * 0.018f);
+            var leftHandTarget = chestPos - right * (0.11f + blend * 0.11f) - up * 0.02f + forward * (0.26f - beat * 0.018f);
 
             ApplyArmTargets(
                 rightUpperArm,
                 rightLowerArm,
                 rightHand,
-                rightUpperArmBase,
-                rightLowerArmBase,
-                rightHandBase,
                 rightElbow,
                 rightHandTarget,
                 blend,
@@ -327,55 +341,51 @@ namespace SrtpAvatar
                 leftUpperArm,
                 leftLowerArm,
                 leftHand,
-                leftUpperArmBase,
-                leftLowerArmBase,
-                leftHandBase,
                 leftElbow,
                 leftHandTarget,
-                blend,
+                blend * 0.62f,
                 Quaternion.Euler(-8f, -8f, -7f));
         }
 
-        private void ResetUpperBodyForGesture(float chestPitch, float chestYaw, float chestRoll)
+        private void AddChestGesture(float chestPitch, float chestYaw, float chestRoll)
         {
             if (chest != null)
             {
-                chest.localRotation = chestBase * Quaternion.Euler(chestPitch, chestYaw, chestRoll);
+                chest.localRotation *= Quaternion.Euler(chestPitch, chestYaw, chestRoll);
             }
 
-            ApplyRelaxedArms(0f);
         }
 
         private void ApplyRelaxedArms(float breathe)
         {
             if (leftShoulder != null)
             {
-                leftShoulder.localRotation = leftShoulderBase;
+                leftShoulder.localRotation = leftShoulderBase * Quaternion.Euler(0f, 0f, breathe * 0.18f);
             }
 
             if (rightShoulder != null)
             {
-                rightShoulder.localRotation = rightShoulderBase;
+                rightShoulder.localRotation = rightShoulderBase * Quaternion.Euler(0f, 0f, -breathe * 0.15f);
             }
 
             if (leftUpperArm != null)
             {
-                leftUpperArm.localRotation = leftUpperArmBase * Quaternion.Euler(8f + breathe * 0.8f, 0f, 72f);
+                leftUpperArm.localRotation = leftUpperArmBase * Quaternion.Euler(-2.5f + breathe * 0.45f, 0f, 73f);
             }
 
             if (rightUpperArm != null)
             {
-                rightUpperArm.localRotation = rightUpperArmBase * Quaternion.Euler(8f + breathe * 0.8f, 0f, -72f);
+                rightUpperArm.localRotation = rightUpperArmBase * Quaternion.Euler(-2f + breathe * 0.35f, 0f, -71f);
             }
 
             if (leftLowerArm != null)
             {
-                leftLowerArm.localRotation = leftLowerArmBase * Quaternion.Euler(-8f, 0f, -4f);
+                leftLowerArm.localRotation = leftLowerArmBase * Quaternion.Euler(0f, 12f, 0f);
             }
 
             if (rightLowerArm != null)
             {
-                rightLowerArm.localRotation = rightLowerArmBase * Quaternion.Euler(-8f, 0f, 4f);
+                rightLowerArm.localRotation = rightLowerArmBase * Quaternion.Euler(0f, -12f, 0f);
             }
 
             if (leftHand != null)
@@ -393,9 +403,6 @@ namespace SrtpAvatar
             Transform upperArm,
             Transform lowerArm,
             Transform hand,
-            Quaternion upperBase,
-            Quaternion lowerBase,
-            Quaternion handBase,
             Vector3 elbowTarget,
             Vector3 handTarget,
             float blend,
@@ -411,8 +418,35 @@ namespace SrtpAvatar
             var lowerStart = lowerArm.localRotation;
             var handStart = hand.localRotation;
 
-            AimChildDirection(upperArm, lowerArm, elbowTarget - upperArm.position);
-            AimChildDirection(lowerArm, hand, handTarget - lowerArm.position);
+            // Solve the two fixed-length segments together. The elbow target is a bend hint,
+            // not a separate point to aim at independently of the wrist.
+            var shoulder = upperArm.position;
+            var upperLength = Vector3.Distance(shoulder, lowerArm.position);
+            var lowerLength = Vector3.Distance(lowerArm.position, hand.position);
+            var reach = handTarget - shoulder;
+            var direction = reach.normalized;
+            // These are relaxed conversational-pose bounds, not medical joint limits.
+            var minimumReach = Mathf.Sqrt(upperLength * upperLength + lowerLength * lowerLength
+                + 2f * upperLength * lowerLength * Mathf.Cos(140f * Mathf.Deg2Rad));
+            var distance = Mathf.Clamp(reach.magnitude, minimumReach, (upperLength + lowerLength) * 0.98f);
+            var along = (upperLength * upperLength - lowerLength * lowerLength + distance * distance) / (2f * distance);
+            var height = Mathf.Sqrt(Mathf.Max(0f, upperLength * upperLength - along * along));
+            var bend = Vector3.ProjectOnPlane(elbowTarget - shoulder, direction).normalized;
+            var solvedElbow = shoulder + direction * along + bend * height;
+            var solvedHand = shoulder + direction * distance;
+            AimChildDirection(upperArm, lowerArm, solvedElbow - shoulder);
+
+            // VRM's normalized T-pose uses +/-Y as the elbow hinge. Rotate the upper
+            // arm into the bend plane so the forearm flexes instead of swinging sideways.
+            var lowerBase = upperArm == rightUpperArm ? rightLowerArmBase : leftLowerArmBase;
+            var hinge = upperArm == rightUpperArm ? Vector3.down : Vector3.up;
+            var upperDirection = (lowerArm.position - shoulder).normalized;
+            var planeNormal = Vector3.Cross(upperDirection, solvedHand - lowerArm.position).normalized;
+            var currentHinge = upperArm.TransformDirection(lowerBase * hinge);
+            var twist = Vector3.SignedAngle(currentHinge, planeNormal, upperDirection);
+            upperArm.rotation = Quaternion.AngleAxis(twist, upperDirection) * upperArm.rotation;
+            var flex = Vector3.Angle(upperDirection, solvedHand - lowerArm.position);
+            lowerArm.localRotation = lowerBase * Quaternion.AngleAxis(flex, hinge);
 
             var targetUpper = upperArm.localRotation;
             var targetLower = lowerArm.localRotation;
@@ -495,97 +529,112 @@ namespace SrtpAvatar
 
         private void UpdateEmotionWeights()
         {
-            var step = expressionBlendSpeed * Time.deltaTime;
+            var step = Damp(expressionBlendSpeed * 0.55f, Time.deltaTime);
             for (var i = 0; i < emotionWeights.Length; i++)
             {
-                emotionWeights[i] = Mathf.MoveTowards(emotionWeights[i], targetEmotionWeights[i], step);
+                emotionWeights[i] = Mathf.Lerp(emotionWeights[i], targetEmotionWeights[i], step);
             }
         }
 
         private void ApplyEmotionBlendShapes()
         {
             SetPreset(BlendShapePreset.Neutral, emotionWeights[(int)AvatarEmotion.neutral]);
-            SetPreset(BlendShapePreset.Joy, emotionWeights[(int)AvatarEmotion.joy]);
-            SetPreset(BlendShapePreset.Angry, emotionWeights[(int)AvatarEmotion.angry] * 0.9f);
-            SetPreset(BlendShapePreset.Sorrow, emotionWeights[(int)AvatarEmotion.sorrow] * 0.9f);
-            SetPreset(BlendShapePreset.Fun, emotionWeights[(int)AvatarEmotion.fun]);
-            SetUnknown("Surprised", emotionWeights[(int)AvatarEmotion.surprised]);
+            SetPreset(BlendShapePreset.Joy, emotionWeights[(int)AvatarEmotion.joy] * 0.6f);
+            SetPreset(BlendShapePreset.Angry, emotionWeights[(int)AvatarEmotion.angry] * 0.6f);
+            SetPreset(BlendShapePreset.Sorrow, emotionWeights[(int)AvatarEmotion.sorrow] * 0.65f);
+            SetPreset(BlendShapePreset.Fun, emotionWeights[(int)AvatarEmotion.fun] * 0.65f);
+            SetUnknown("Surprised", emotionWeights[(int)AvatarEmotion.surprised] * 0.7f);
             SetPreset(BlendShapePreset.Blink, blinkWeight);
         }
 
         private void ApplyMouth()
         {
-            var targetLevel = state == AvatarState.speaking ? Mathf.Clamp01(0.08f + speechLevel * 0.82f) : 0f;
-            smoothedSpeechLevel = Mathf.MoveTowards(smoothedSpeechLevel, targetLevel, mouthBlendSpeed * Time.deltaTime);
-            SetPreset(BlendShapePreset.A, smoothedSpeechLevel);
+            var targetLevel = state == AvatarState.speaking ? speechLevel * 0.82f : 0f;
+            var speed = mouthBlendSpeed * (targetLevel > smoothedSpeechLevel ? 2.4f : 1.8f);
+            smoothedSpeechLevel = Mathf.Lerp(smoothedSpeechLevel, targetLevel, Damp(speed, Time.deltaTime));
+            var rounded = 0.5f + 0.5f * Mathf.Sin(motionTime * 6.7f + 0.7f);
+            var wide = 0.5f + 0.5f * Mathf.Sin(motionTime * 8.3f);
+            SetPreset(BlendShapePreset.A, smoothedSpeechLevel * (0.45f + wide * 0.2f));
+            SetPreset(BlendShapePreset.I, smoothedSpeechLevel * wide * 0.16f);
+            SetPreset(BlendShapePreset.U, smoothedSpeechLevel * rounded * 0.12f);
+            SetPreset(BlendShapePreset.E, smoothedSpeechLevel * (1f - rounded) * 0.12f);
+            SetPreset(BlendShapePreset.O, smoothedSpeechLevel * rounded * 0.22f);
         }
 
-        private void ApplyStatePose(float idle, float breathe)
+        private void ApplyStatePose()
         {
-            if (state == AvatarState.thinking)
-            {
-                var pulse = Mathf.Sin(Time.time * 1.8f) * 0.18f;
-                ApplyThinkPose(0.48f, pulse);
-                return;
-            }
-
-            ApplyHeadMotion(idle);
-            ApplyIdlePose(breathe);
-        }
-
-        private void ApplyIdlePose(float breathe)
-        {
-            var listening = state == AvatarState.listening ? 1f : 0f;
-            var speaking = state == AvatarState.speaking ? 1f : 0f;
-
+            var phase = motionTime + motionPhase;
+            var breathe = Mathf.Sin(phase * 1.35f);
+            var sway = Mathf.Sin(phase * 0.53f) * 0.65f + Mathf.Sin(phase * 0.87f) * 0.35f;
+            var speechBeat = smoothedSpeechLevel * Mathf.Sin(phase * 2.8f) * speakingWeight;
             if (chest != null)
             {
-                var speechBeat = Mathf.Sin(Time.time * 3.2f) * speaking;
-                chest.localRotation = chestBase * Quaternion.Euler(1.3f * listening + breathe * 0.8f + speechBeat * 0.45f, 0f, breathe * 0.35f);
+                chest.localRotation = chestBase * Quaternion.Euler(
+                    listeningWeight * 0.9f + breathe * 0.45f + speechBeat * 0.4f,
+                    sway * 0.35f, sway * 0.3f);
             }
-
-            if (leftUpperArm != null)
+            ApplyRelaxedArms(breathe);
+            if (head != null)
             {
-                leftUpperArm.localRotation = leftUpperArmBase * Quaternion.Euler(8f + breathe * 0.8f, 0f, 72f);
+                head.localRotation = headBase * Quaternion.Euler(
+                    gazeOffset.y + listeningWeight * 1.6f + breathe * 0.3f + speechBeat * 0.6f,
+                    gazeOffset.x + sway * 0.5f, listeningWeight * 0.65f + sway * 0.3f);
             }
-
-            if (rightUpperArm != null)
+            if (activeGesture != AvatarGesture.think && thinkingWeight > 0.001f)
             {
-                rightUpperArm.localRotation = rightUpperArmBase * Quaternion.Euler(8f + breathe * 0.8f, 0f, -72f);
-            }
-
-            if (leftLowerArm != null)
-            {
-                leftLowerArm.localRotation = leftLowerArmBase * Quaternion.Euler(-8f, 0f, -4f);
-            }
-
-            if (rightLowerArm != null)
-            {
-                rightLowerArm.localRotation = rightLowerArmBase * Quaternion.Euler(-8f, 0f, 4f);
-            }
-
-            if (leftHand != null)
-            {
-                leftHand.localRotation = leftHandBase * Quaternion.Euler(0f, 0f, -5f);
-            }
-
-            if (rightHand != null)
-            {
-                rightHand.localRotation = rightHandBase * Quaternion.Euler(0f, 0f, 5f);
+                ApplyThinkPose(thinkingWeight, breathe * 0.12f);
             }
         }
 
-        private void ApplyHeadMotion(float idle)
+        private void UpdateGaze(float dt)
         {
-            if (head == null)
+            if (motionTime >= nextGazeTime)
             {
-                return;
+                gazeTarget = new Vector2(Random.Range(-1.4f, 1.4f), Random.Range(-0.6f, 0.6f));
+                nextGazeTime = motionTime + Random.Range(2.4f, 4.8f);
             }
+            var target = gazeTarget;
+            if (lookTarget != null && head != null)
+            {
+                var direction = transform.InverseTransformDirection(lookTarget.position - head.position);
+                if (direction.z > 0.01f)
+                {
+                    target.x += Mathf.Clamp(Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg, -14f, 14f) * 0.6f;
+                    target.y -= Mathf.Clamp(Mathf.Atan2(direction.y, new Vector2(direction.x, direction.z).magnitude) * Mathf.Rad2Deg, -9f, 9f) * 0.55f;
+                }
+            }
+            gazeOffset = Vector2.Lerp(gazeOffset, target, Damp(2.8f, dt));
+        }
 
-            var listenPitch = state == AvatarState.listening ? 3.8f : 0f;
-            var speakingPitch = state == AvatarState.speaking ? 1.2f : 0f;
-            var speechBeat = state == AvatarState.speaking ? Mathf.Sin(Time.time * 3.7f) * 0.8f : 0f;
-            head.localRotation = headBase * Quaternion.Euler(listenPitch + speakingPitch + idle * 0.9f + speechBeat, idle * 0.75f, 0f);
+        private void SmoothPose(float dt)
+        {
+            for (var i = 0; i < poseBones.Length; i++)
+            {
+                var bone = poseBones[i];
+                if (bone == null) continue;
+                var target = Quaternion.Slerp(displayedPose[i], bone.localRotation, Damp(12f, dt));
+                displayedPose[i] = Quaternion.RotateTowards(displayedPose[i], target, (bone == head ? 90f : 160f) * dt);
+                bone.localRotation = displayedPose[i];
+            }
+        }
+
+        private void ApplyFingers(float dt)
+        {
+            var gestureWeight = GestureWeight();
+            foreach (var finger in fingers)
+            {
+                if (finger.bone == null) continue;
+                var curl = 1f;
+                if (finger.right && activeGesture == AvatarGesture.wave) curl = Mathf.Lerp(1f, 0.2f, gestureWeight);
+                if (finger.right)
+                {
+                    var think = activeGesture == AvatarGesture.think ? gestureWeight : thinkingWeight;
+                    curl += think * 0.7f;
+                }
+                var target = finger.rest * Quaternion.Euler(0f, 0f, finger.curl * curl);
+                finger.displayed = Quaternion.Slerp(finger.displayed, target, Damp(9f, dt));
+                finger.bone.localRotation = finger.displayed;
+            }
         }
 
         private void UpdateBlink()
@@ -594,23 +643,27 @@ namespace SrtpAvatar
             {
                 blinking = true;
                 blinkElapsed = 0f;
+                blinkDuration = Random.Range(0.18f, 0.23f);
             }
-
-            if (!blinking)
-            {
-                blinkWeight = Mathf.MoveTowards(blinkWeight, 0f, Time.deltaTime * 8f);
-                return;
-            }
-
+            if (!blinking) return;
             blinkElapsed += Time.deltaTime;
-            const float duration = 0.18f;
-            var normalized = Mathf.Clamp01(blinkElapsed / duration);
-            blinkWeight = Mathf.Sin(normalized * Mathf.PI);
-            if (normalized >= 1f)
+            var t = Mathf.Clamp01(blinkElapsed / blinkDuration);
+            blinkWeight = t < 0.32f ? Mathf.SmoothStep(0f, 1f, t / 0.32f)
+                : t < 0.42f ? 1f : 1f - Mathf.SmoothStep(0f, 1f, (t - 0.42f) / 0.58f);
+            if (t >= 1f)
             {
                 blinking = false;
                 blinkWeight = 0f;
-                ScheduleNextBlink();
+                if (!doubleBlink && Random.value < 0.1f)
+                {
+                    doubleBlink = true;
+                    nextBlinkTime = Time.time + 0.16f;
+                }
+                else
+                {
+                    doubleBlink = false;
+                    ScheduleNextBlink();
+                }
             }
         }
 
@@ -619,55 +672,32 @@ namespace SrtpAvatar
             nextBlinkTime = Time.time + Random.Range(blinkIntervalRange.x, blinkIntervalRange.y);
         }
 
-        private IEnumerator ReturnUpperBodyToBase(float duration)
+        private static float Damp(float speed, float dt)
         {
-            var elapsed = 0f;
-            var headStart = head == null ? Quaternion.identity : head.localRotation;
-            var chestStart = chest == null ? Quaternion.identity : chest.localRotation;
-            var leftShoulderStart = leftShoulder == null ? Quaternion.identity : leftShoulder.localRotation;
-            var rightShoulderStart = rightShoulder == null ? Quaternion.identity : rightShoulder.localRotation;
-            var leftUpperStart = leftUpperArm == null ? Quaternion.identity : leftUpperArm.localRotation;
-            var rightUpperStart = rightUpperArm == null ? Quaternion.identity : rightUpperArm.localRotation;
-            var leftLowerStart = leftLowerArm == null ? Quaternion.identity : leftLowerArm.localRotation;
-            var rightLowerStart = rightLowerArm == null ? Quaternion.identity : rightLowerArm.localRotation;
-            var leftHandStart = leftHand == null ? Quaternion.identity : leftHand.localRotation;
-            var rightHandStart = rightHand == null ? Quaternion.identity : rightHand.localRotation;
-            var leftUpperTarget = leftUpperArmBase * Quaternion.Euler(8f, 0f, 72f);
-            var rightUpperTarget = rightUpperArmBase * Quaternion.Euler(8f, 0f, -72f);
-            var leftLowerTarget = leftLowerArmBase * Quaternion.Euler(-8f, 0f, -4f);
-            var rightLowerTarget = rightLowerArmBase * Quaternion.Euler(-8f, 0f, 4f);
-            var leftHandTarget = leftHandBase * Quaternion.Euler(0f, 0f, -5f);
-            var rightHandTarget = rightHandBase * Quaternion.Euler(0f, 0f, 5f);
-
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                var t = EaseInOut(Mathf.Clamp01(elapsed / duration));
-                SlerpBone(head, headStart, headBase, t);
-                SlerpBone(chest, chestStart, chestBase, t);
-                SlerpBone(leftShoulder, leftShoulderStart, leftShoulderBase, t);
-                SlerpBone(rightShoulder, rightShoulderStart, rightShoulderBase, t);
-                SlerpBone(leftUpperArm, leftUpperStart, leftUpperTarget, t);
-                SlerpBone(rightUpperArm, rightUpperStart, rightUpperTarget, t);
-                SlerpBone(leftLowerArm, leftLowerStart, leftLowerTarget, t);
-                SlerpBone(rightLowerArm, rightLowerStart, rightLowerTarget, t);
-                SlerpBone(leftHand, leftHandStart, leftHandTarget, t);
-                SlerpBone(rightHand, rightHandStart, rightHandTarget, t);
-                yield return null;
-            }
+            return 1f - Mathf.Exp(-speed * dt);
         }
 
-        private static void SlerpBone(Transform bone, Quaternion from, Quaternion to, float t)
+        private void CachePose()
         {
-            if (bone != null)
+            poseBones = new[] { head, chest, leftShoulder, rightShoulder, leftUpperArm, rightUpperArm,
+                leftLowerArm, rightLowerArm, leftHand, rightHand };
+            displayedPose = new Quaternion[poseBones.Length];
+            var roots = new[] { HumanBodyBones.LeftIndexProximal, HumanBodyBones.LeftMiddleProximal,
+                HumanBodyBones.LeftRingProximal, HumanBodyBones.LeftLittleProximal,
+                HumanBodyBones.RightIndexProximal, HumanBodyBones.RightMiddleProximal,
+                HumanBodyBones.RightRingProximal, HumanBodyBones.RightLittleProximal };
+            fingers = new FingerJoint[roots.Length * 3];
+            for (var i = 0; i < roots.Length; i++)
             {
-                bone.localRotation = Quaternion.Slerp(from, to, t);
+                for (var joint = 0; joint < 3; joint++)
+                {
+                    var bone = animator != null && animator.isHuman
+                        ? animator.GetBoneTransform((HumanBodyBones)((int)roots[i] + joint)) : null;
+                    var rest = bone == null ? Quaternion.identity : bone.localRotation;
+                    fingers[i * 3 + joint] = new FingerJoint { bone = bone, rest = rest, displayed = rest,
+                        right = i >= 4, curl = (i < 4 ? 1f : -1f) * (joint == 1 ? 18f : 9f) };
+                }
             }
-        }
-
-        private static float EaseInOut(float t)
-        {
-            return Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(t));
         }
 
         private void SetPreset(BlendShapePreset preset, float value)
@@ -677,7 +707,7 @@ namespace SrtpAvatar
                 return;
             }
 
-            blendShapeProxy.ImmediatelySetValue(BlendShapeKey.CreateFromPreset(preset), Mathf.Clamp01(value));
+            blendShapeProxy.AccumulateValue(BlendShapeKey.CreateFromPreset(preset), Mathf.Clamp01(value));
         }
 
         private void SetUnknown(string name, float value)
@@ -687,7 +717,7 @@ namespace SrtpAvatar
                 return;
             }
 
-            blendShapeProxy.ImmediatelySetValue(BlendShapeKey.CreateUnknown(name), Mathf.Clamp01(value));
+            blendShapeProxy.AccumulateValue(BlendShapeKey.CreateUnknown(name), Mathf.Clamp01(value));
         }
 
         private void CacheBones()
@@ -759,57 +789,5 @@ namespace SrtpAvatar
             }
         }
 
-        private void ResetBones()
-        {
-            if (head != null)
-            {
-                head.localRotation = headBase;
-            }
-
-            if (chest != null)
-            {
-                chest.localRotation = chestBase;
-            }
-
-            if (leftShoulder != null)
-            {
-                leftShoulder.localRotation = leftShoulderBase;
-            }
-
-            if (rightShoulder != null)
-            {
-                rightShoulder.localRotation = rightShoulderBase;
-            }
-
-            if (leftUpperArm != null)
-            {
-                leftUpperArm.localRotation = leftUpperArmBase;
-            }
-
-            if (rightUpperArm != null)
-            {
-                rightUpperArm.localRotation = rightUpperArmBase;
-            }
-
-            if (leftLowerArm != null)
-            {
-                leftLowerArm.localRotation = leftLowerArmBase;
-            }
-
-            if (rightLowerArm != null)
-            {
-                rightLowerArm.localRotation = rightLowerArmBase;
-            }
-
-            if (leftHand != null)
-            {
-                leftHand.localRotation = leftHandBase;
-            }
-
-            if (rightHand != null)
-            {
-                rightHand.localRotation = rightHandBase;
-            }
-        }
     }
 }

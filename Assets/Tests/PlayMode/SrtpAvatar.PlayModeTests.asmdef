@@ -1,0 +1,23 @@
+{
+  "name": "SrtpAvatar.PlayModeTests",
+  "rootNamespace": "SrtpAvatar.Tests",
+  "references": [
+    "UnityEngine.TestRunner",
+    "SrtpAvatar.Runtime",
+    "VRM",
+    "UnityEngine.UI"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "nunit.framework.dll"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
