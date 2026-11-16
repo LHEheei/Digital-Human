@@ -14,9 +14,9 @@ namespace SrtpAvatar
     {
         public bool IsAvailable => true;
         public SimulatedDialogueScenario Scenario { get; set; }
-        public string Reply { get; set; } = "你好，很高兴见到你。我们可以从今天想聊的事情开始。";
-        public string Emotion { get; set; } = "joy";
-        public string Gesture { get; set; } = "explain";
+        public string Reply { get; set; } = "";
+        public string Emotion { get; set; } = "neutral";
+        public string Gesture { get; set; } = "none";
         public string Memory { get; set; } = "";
         public int ChunkDelayMilliseconds { get; set; } = 25;
         public int SlowChunkDelayMilliseconds { get; set; } = 250;
@@ -39,6 +39,9 @@ namespace SrtpAvatar
                 await Task.Delay(delay * 4, cancellationToken);
                 throw new AppException(AppErr.network, "模拟请求超时。");
             }
+
+            if (scenario != SimulatedDialogueScenario.InvalidJson && string.IsNullOrWhiteSpace(Reply))
+                throw new AppException(AppErr.config, "请先填写调试用的测试回复。");
 
             var decision = new DialogueDecision { reply = Reply, emotion = Emotion, gesture = Gesture, carIntent = "none", memory = Memory };
             var json = scenario == SimulatedDialogueScenario.InvalidJson ? "{\"reply\":42}" : JsonUtility.ToJson(decision);

@@ -21,6 +21,9 @@ namespace SrtpAvatar
 
         public async Task<DialogueDecision> CompleteAsync(TalkInput input, string recentContext, string longTermContext, CancellationToken cancellationToken, Action<string> onReplySentence = null)
         {
+            if (input == null || string.IsNullOrWhiteSpace(input.text))
+                throw new ArgumentException("请输入对话内容。", nameof(input));
+            cancellationToken.ThrowIfCancellationRequested();
             var apiKey = RuntimeSecrets.ResolveDeepSeekApiKey(config);
             if (string.IsNullOrWhiteSpace(apiKey))
             {
@@ -63,7 +66,7 @@ namespace SrtpAvatar
             }
 
             var userText = input.text;
-            messages.Add(new ChatMessage { role = "user", content = string.IsNullOrWhiteSpace(userText) ? "你好" : userText.Trim() });
+            messages.Add(new ChatMessage { role = "user", content = userText.Trim() });
 
             var requestBody = new ChatCompletionRequest
             {

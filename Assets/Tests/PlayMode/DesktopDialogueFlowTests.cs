@@ -27,6 +27,7 @@ namespace SrtpAvatar.Tests
             app = Object.FindAnyObjectByType<DigitalHumanAppController>();
             Assert.IsNotNull(app);
             yield return null;
+            app.SelectDesktopMode(false);
             app.DesktopSimulation.ChunkDelayMilliseconds = 1;
             app.DesktopSecondsPerCharacter = .001f;
             app.DesktopSimulation.Reply = "你好。我们继续聊吧。";

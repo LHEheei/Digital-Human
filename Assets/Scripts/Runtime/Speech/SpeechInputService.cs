@@ -56,6 +56,7 @@ namespace SrtpAvatar
                 {
                     throw;
                 }
+                catch (AppException) { throw; }
                 catch (Exception ex)
                 {
                     var message = string.IsNullOrWhiteSpace(ex.Message) ? "系统语音识别失败。" : ex.Message;

@@ -32,7 +32,7 @@ namespace SrtpAvatar
     [Serializable]
     public sealed class DialogueDecision
     {
-        public string reply = "好的，我在。";
+        public string reply = "";
         public string emotion = "neutral";
         public string gesture = "none";
         public string carIntent = "none";
@@ -42,10 +42,7 @@ namespace SrtpAvatar
         public AvatarGesture ParsedGesture => ParseEnum(gesture, AvatarGesture.none);
         public DialogueDecision Normalize()
         {
-            if (string.IsNullOrWhiteSpace(reply))
-            {
-                reply = "我理解了。";
-            }
+            reply = string.IsNullOrWhiteSpace(reply) ? "" : reply.Trim();
 
             emotion = NormalizeEnum(emotion, AvatarEmotion.neutral);
             gesture = NormalizeEnum(gesture, AvatarGesture.none);

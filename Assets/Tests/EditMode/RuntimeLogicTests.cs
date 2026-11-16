@@ -33,7 +33,7 @@ namespace SrtpAvatar.Tests
                 memory = " note "
             }.Normalize();
 
-            Assert.AreEqual("我理解了。", decision.reply);
+            Assert.IsEmpty(decision.reply);
             Assert.AreEqual("neutral", decision.emotion);
             Assert.AreEqual("none", decision.gesture);
             Assert.AreEqual("forward", decision.carIntent);
@@ -340,7 +340,7 @@ namespace SrtpAvatar.Tests
             var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .7f, source = "fusion" });
             Assert.AreEqual("neutral", applied.emotion);
             Assert.AreEqual("none", applied.gesture);
-            Assert.AreEqual("好的，我在。", applied.reply);
+            Assert.IsEmpty(applied.reply);
 
             var lowConfidence = EmotionResponsePolicy.Apply(new DialogueDecision { emotion = "joy" }, new UserEmo { label = "angry", score = .4f, source = "fusion" });
             Assert.AreEqual("joy", lowConfidence.emotion);
@@ -361,12 +361,12 @@ namespace SrtpAvatar.Tests
         }
 
         [Test]
-        public void EmotionResponsePolicy_RemovesTechnicalEmotionDisclosure()
+        public void EmotionResponsePolicy_PreservesGeneratedText()
         {
             var decision = new DialogueDecision { reply = "我通过摄像头识别出你很难过。", gesture = "none" };
             var applied = EmotionResponsePolicy.Apply(decision, new UserEmo { label = "sorrow", score = .9f, source = "fusion" });
 
-            Assert.AreEqual("愿意和我多说一点吗？", applied.reply);
+            Assert.AreEqual("我通过摄像头识别出你很难过。", applied.reply);
         }
 
         [Test]

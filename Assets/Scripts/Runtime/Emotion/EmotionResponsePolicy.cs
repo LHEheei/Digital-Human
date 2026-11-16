@@ -17,7 +17,6 @@ namespace SrtpAvatar
                 return safeDecision;
             }
 
-            safeDecision.reply = EmotionDisclosureGuard.Sanitize(safeDecision.reply);
             if ((fusionEmotion.label == "angry" || fusionEmotion.label == "sorrow")
                 && (safeDecision.emotion == "angry" || safeDecision.emotion == "fun"))
             {

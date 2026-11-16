@@ -19,7 +19,7 @@ namespace SrtpAvatar
 
         public void Add(string userText, DialogueDecision decision, int maxTurns)
         {
-            if (string.IsNullOrWhiteSpace(userText) || decision == null)
+            if (string.IsNullOrWhiteSpace(userText) || decision == null || string.IsNullOrWhiteSpace(decision.reply))
             {
                 return;
             }
@@ -27,7 +27,7 @@ namespace SrtpAvatar
             turns.Add(new Turn
             {
                 userText = userText.Trim(),
-                reply = string.IsNullOrWhiteSpace(decision.reply) ? "我理解了。" : decision.reply.Trim(),
+                reply = decision.reply.Trim(),
                 emotion = decision.emotion,
                 gesture = decision.gesture
             });

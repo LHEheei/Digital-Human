@@ -47,8 +47,9 @@ namespace SrtpAvatar
         public bool LastPlaybackFailed { get; private set; }
         private bool CanPlayReply => speechService.CanSpeak || Application.isEditor;
 
+        public bool NeedsDialogueConfiguration => !dialogueService.CanUseDeepSeek;
         private bool CanUseDeepSeek => config.HasDeepSeekKey;
-        private bool CanAutoListen => !manualSubmissionPending && !textInputFocused && !memoryPanelOpen && config.enableAutoConversation && isActiveAndEnabled && !isDestroyed && CanUseDeepSeek && isApplicationActive && config.preferAndroidNativeSpeech;
+        private bool CanAutoListen => !listeningNeedsManualRetry && !manualSubmissionPending && !textInputFocused && !memoryPanelOpen && config.enableAutoConversation && isActiveAndEnabled && !isDestroyed && CanUseDeepSeek && isApplicationActive && config.preferAndroidNativeSpeech;
 
         private void Awake()
         {
@@ -68,7 +69,7 @@ namespace SrtpAvatar
             ui = new AppUi(statusText, subtitleText, hintText);
             automaticConversation = new AutomaticConversationLoop(() => CanAutoListen,
                 RunAutomaticListeningTurnAsync,
-                () => AutoConversationPolicy.NormalizeRetryDelay(config.autoConversationRetryDelaySeconds),
+                () => ListeningRetryDelay,
                 ReportListeningError);
             InitializeConversationPanel();
         }
@@ -83,6 +84,7 @@ namespace SrtpAvatar
 
         public void RefreshConversationSettings()
         {
+            ResetListeningRecovery();
             ListeningErrorMessage = "";
             StopAutoListening();
             conversationCancellation?.Cancel();
@@ -103,6 +105,7 @@ namespace SrtpAvatar
                 if (isApplicationActive && !isDestroyed) emotionPerception?.ResumeAudioCapture();
             }
             cancellationToken.ThrowIfCancellationRequested();
+            ResetListeningRecovery();
             if (userTurn != null && AutoConversationPolicy.HasUsableText(userTurn.Text))
                 await RunConversationFromCapturedTurnAsync(userTurn, cancellationToken);
         }
@@ -119,7 +122,6 @@ namespace SrtpAvatar
             LastPlaybackFailed = false;
             LastErrorMessage = "";
             ListeningPhase = SpeechListeningPhase.Inactive;
-            ListeningErrorMessage = "";
             BeginTurnRecord(userTurn.Text);
             ResetSentencePlayback();
             conversationTiming = new ConversationTiming();
@@ -443,7 +445,7 @@ namespace SrtpAvatar
         {
             SetState(AvatarState.idle, "空闲");
 #if UNITY_EDITOR
-            SetSubtitle("在 SRTP / Dialogue Workbench 输入文字开始对话。");
+            SetSubtitle("在下方输入消息；首次使用请先通过右上角 API 配置模型。");
 #else
             SetSubtitle(CanAutoListen ? "正在聆听，直接说话即可开始对话" : "请先完成 API 和系统语音服务配置");
 #endif
@@ -462,7 +464,7 @@ namespace SrtpAvatar
         private string ResolveStartupHint()
         {
 #if UNITY_EDITOR
-            return DesktopLiveMode ? "真实模型 · 电脑端预览播放" : "离线模拟 · 电脑端预览播放";
+            return DesktopLiveMode ? "真实模型 · 电脑端预览播放" : "离线测试 · 电脑端预览播放";
 #else
             if (!config.ShowDiagnostics) return CanAutoListen ? "可以直接和我说话。" : "请先完成语音和 API 设置。";
             var input = speechService.CanRecognize ? "输入：Android ASR" : "输入：系统语音不可用";

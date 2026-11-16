@@ -145,6 +145,10 @@ public final class NativeSpeechBridge {
     }
 
     public void speak(final String text, final String languageTag, final String utteranceId) {
+        if (text == null || text.trim().length() == 0) {
+            send(utteranceId, "OnAndroidTtsError", "没有可播报的回复内容。");
+            return;
+        }
         if (activity == null) {
             send(utteranceId, "OnAndroidTtsError", "Android Activity 不可用。");
             return;
@@ -169,7 +173,7 @@ public final class NativeSpeechBridge {
                     params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
                     activeUtteranceId = utteranceId;
                     ttsEnvelopes.clear();
-                    int result = textToSpeech.speak(text == null || text.length() == 0 ? "好的。" : text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
+                    int result = textToSpeech.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId);
                     if (result == TextToSpeech.ERROR) {
                         send(utteranceId, "OnAndroidTtsError", "系统 TTS 播报启动失败。");
                     }
@@ -717,7 +721,8 @@ public final class NativeSpeechBridge {
                 && startOfflineRecognition(sessionId)) {
                 return;
             }
-            send(sessionId, "OnAndroidSpeechError", errorMessage(error));
+            send(sessionId, error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+                ? "OnAndroidSpeechPermissionError" : "OnAndroidSpeechError", errorMessage(error));
         }
 
         @Override

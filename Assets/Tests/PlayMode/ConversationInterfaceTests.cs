@@ -25,6 +25,7 @@ namespace SrtpAvatar.Tests
             app = Object.FindAnyObjectByType<DigitalHumanAppController>();
             panel = app.GetComponent<ConversationPanel>();
             yield return null;
+            app.SelectDesktopMode(false);
             app.DesktopSimulation.ChunkDelayMilliseconds = 1;
             app.DesktopSecondsPerCharacter = .001f;
             app.DesktopSimulation.Reply = "你好。我们继续聊吧。";
@@ -160,6 +161,17 @@ namespace SrtpAvatar.Tests
             panel.MemoryPanel.EditInput.text = "用户喜欢古典音乐，希望回复简洁、自然。";
             yield return Capture("memory-portrait", 720, 1280);
             yield return Capture("memory-landscape", 1280, 720);
+            panel.MemoryPanel.CloseButton.onClick.Invoke();
+            var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var config = (AppConfig)typeof(DigitalHumanAppController).GetField("config", flags).GetValue(app);
+            config.deepSeekApiKey = "local-test-only"; config.enableAutoConversation = true;
+            typeof(DigitalHumanAppController).GetMethod("ReportListeningError", flags).Invoke(app,
+                new object[] { new AppException(AppErr.micPerm, "麦克风权限已被禁止，请前往系统设置开启。") });
+            yield return null;
+            Assert.IsTrue(panel.RetryListeningButton.gameObject.activeSelf);
+            yield return Capture("speech-retry-portrait", 720, 1280);
+            yield return Capture("speech-retry-landscape", 1280, 720);
+            config.enableAutoConversation = false; app.RefreshConversationSettings();
         }
         private IEnumerator Capture(string name, int width, int height)
         {

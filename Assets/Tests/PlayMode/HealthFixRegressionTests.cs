@@ -30,6 +30,7 @@ namespace SrtpAvatar.Tests
             panel = app.GetComponent<ConversationPanel>();
             avatar = Object.FindAnyObjectByType<VrmAvatarBridge>();
             yield return null;
+            app.SelectDesktopMode(false);
             app.DesktopSimulation.ChunkDelayMilliseconds = 1;
         }
         [UnityTearDown] public IEnumerator TearDown()

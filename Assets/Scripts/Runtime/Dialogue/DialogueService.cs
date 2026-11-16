@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -61,19 +60,15 @@ namespace SrtpAvatar
                 };
             }
 
-            var spokenReply = new StringBuilder();
             Action<string> emit = onReplySentence == null ? null : sentence =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var safeSentence = input.fusionEmo != null && input.fusionEmo.IsUsable && input.fusionEmo.score >= 0.5f
-                    ? EmotionDisclosureGuard.Sanitize(sentence) : sentence;
-                spokenReply.Append(safeSentence);
-                onReplySentence(safeSentence);
+                if (!string.IsNullOrWhiteSpace(sentence)) onReplySentence(sentence);
             };
             var decision = await DecideWithDeepSeekAsync(input, cancellationToken, emit);
-            if (emit != null && spokenReply.Length > 0) decision.reply = spokenReply.ToString();
-
             cancellationToken.ThrowIfCancellationRequested();
+            if (decision == null || string.IsNullOrWhiteSpace(decision.reply))
+                throw new AppException(AppErr.badJson, "模型未返回有效回复，请重试。");
             decision = EmotionResponsePolicy.Apply(decision, input.fusionEmo);
             Remember(userText, decision);
             return decision;

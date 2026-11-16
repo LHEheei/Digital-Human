@@ -8,11 +8,11 @@ namespace SrtpAvatarEditor
 {
     public sealed class DialogueWorkbenchWindow : EditorWindow
     {
-        private static readonly string[] Modes = { "离线模拟", "真实模型" };
+        private static readonly string[] Modes = { "离线测试", "真实模型" };
         private static readonly string[] Scenarios = { "正常回复", "慢速分包", "首句后断流", "认证失败", "请求超时", "非法 JSON" };
         private static readonly string[] Emotions = { "neutral", "joy", "angry", "sorrow", "fun", "surprised" };
         private static readonly string[] Gestures = { "none", "nod", "wave", "think", "explain" };
-        [SerializeField] private string input = "你好，今天我们聊些什么？";
+        [SerializeField] private string input = "";
         private DigitalHumanAppController controller;
         private Vector2 scroll;
         private string message = "";
@@ -44,7 +44,7 @@ namespace SrtpAvatarEditor
             EditorGUILayout.Space();
             if (!EditorApplication.isPlaying)
             {
-                EditorGUILayout.HelpBox("打开演示场景并进入 Play Mode 后，可在这里直接对话。离线模拟无需 API Key。", MessageType.Info);
+                EditorGUILayout.HelpBox("进入 Play Mode 后默认使用真实模型，请先在 Game 窗口配置 API。离线测试需要自行填写测试回复。", MessageType.Info);
                 using (new EditorGUI.DisabledScope(EditorApplication.isPlayingOrWillChangePlaymode))
                 {
                     if (GUILayout.Button("打开演示场景并运行", GUILayout.Height(32)) && EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
@@ -123,7 +123,8 @@ namespace SrtpAvatarEditor
         {
             var simulation = controller.DesktopSimulation;
             simulation.Scenario = (SimulatedDialogueScenario)EditorGUILayout.Popup("测试情景", (int)simulation.Scenario, Scenarios);
-            EditorGUILayout.LabelField("固定回复");
+            EditorGUILayout.HelpBox("仅用于验证交互流程，测试回复需自行填写。", MessageType.Info);
+            EditorGUILayout.LabelField("测试回复");
             simulation.Reply = EditorGUILayout.TextArea(simulation.Reply, GUILayout.MinHeight(50));
             simulation.Emotion = Emotions[EditorGUILayout.Popup("表情", Math.Max(0, Array.IndexOf(Emotions, simulation.Emotion)), Emotions)];
             simulation.Gesture = Gestures[EditorGUILayout.Popup("动作", Math.Max(0, Array.IndexOf(Gestures, simulation.Gesture)), Gestures)];

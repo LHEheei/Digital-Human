@@ -19,8 +19,8 @@ namespace SrtpAvatar
                 return false;
             }
 
-            // Keep a missing reply distinct from DialogueDecision's display default.
-            var parsed = new DialogueDecision { reply = null };
+            // A reply must be supplied by the model; metadata alone is not a response.
+            var parsed = new DialogueDecision();
             try
             {
                 JsonUtility.FromJsonOverwrite(json, parsed);

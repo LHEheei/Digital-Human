@@ -27,8 +27,24 @@ namespace SrtpAvatar
             return Math.Max(0.25f, seconds <= 0f ? DefaultRetryDelaySeconds : seconds);
         }
 
+        public static float RetryDelay(float seconds, int consecutiveFailures)
+        {
+            var baseline = NormalizeRetryDelay(seconds);
+            return (float)Math.Min(Math.Max(30f, baseline), baseline * Math.Pow(2, Math.Min(10, Math.Max(0, consecutiveFailures - 1))));
+        }
+
+        public static bool RequiresListeningAction(Exception exception)
+        {
+            for (var current = exception; current != null; current = current.InnerException)
+                if (current is AppException app && app.Error == AppErr.micPerm) return true;
+            return false;
+        }
+
         public static bool ShouldQuietlyRetry(Exception exception)
         {
+            // Typed failures take precedence over wording from this or a nested exception.
+            for (var current = exception; current != null; current = current.InnerException)
+                if (current is AppException app && app.Error != AppErr.speech) return false;
             for (var current = exception; current != null; current = current.InnerException)
             {
                 if (ShouldQuietlyRetry(current.Message))
@@ -51,8 +67,7 @@ namespace SrtpAvatar
                 || message.IndexOf("没有识别到语音", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("speech timeout", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("离线语音模型正在准备", StringComparison.OrdinalIgnoreCase) >= 0
-                || message.IndexOf("no match", StringComparison.OrdinalIgnoreCase) >= 0
-                || message.IndexOf("超时", StringComparison.OrdinalIgnoreCase) >= 0;
+                || message.IndexOf("no match", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 }

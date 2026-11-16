@@ -89,6 +89,8 @@ namespace SrtpAvatar
 
         public Task SpeakAsync(string text, string language)
         {
+            if (string.IsNullOrWhiteSpace(text))
+                return Task.FromException(new AppException(AppErr.tts, "没有可播报的回复内容。"));
 #if UNITY_ANDROID && !UNITY_EDITOR
             EnsureBridge();
             if (bridge == null)
@@ -99,7 +101,7 @@ namespace SrtpAvatar
             StopSpeaking();
             utteranceId = Guid.NewGuid().ToString("N");
             ttsCompletion = new TaskCompletionSource<bool>();
-            bridge.Call("speak", string.IsNullOrWhiteSpace(text) ? "好的。" : text, NormalizeLanguage(language), utteranceId);
+            bridge.Call("speak", text, NormalizeLanguage(language), utteranceId);
             return ttsCompletion.Task;
 #else
             return Task.FromException(new InvalidOperationException("当前环境没有可用的 Android TTS 服务。"));
@@ -169,6 +171,12 @@ namespace SrtpAvatar
             CompleteRecognition(null, string.IsNullOrWhiteSpace(message) ? "Android 语音识别失败。" : message);
         }
 
+        public void OnAndroidSpeechPermissionError(string callback)
+        {
+            if (!TryReadCallback(callback, recognitionId, out var message)) return;
+            CompleteRecognition(null, string.IsNullOrWhiteSpace(message) ? "没有麦克风权限。" : message, AppErr.micPerm);
+        }
+
         public void OnAndroidTtsStarted(string callback)
         {
             if (TryReadCallback(callback, utteranceId, out _))
@@ -219,7 +227,7 @@ namespace SrtpAvatar
             CompleteTts(string.IsNullOrWhiteSpace(message) ? "Android TTS 播报失败。" : message);
         }
 
-        private void CompleteRecognition(string text, string error)
+        private void CompleteRecognition(string text, string error, AppErr errorCode = AppErr.speech)
         {
             var completion = recognitionCompletion;
             var audioWav = recognitionAudioWav;
@@ -238,7 +246,7 @@ namespace SrtpAvatar
             }
             else
             {
-                completion.TrySetException(new InvalidOperationException(error));
+                completion.TrySetException(new AppException(errorCode, error));
             }
         }
 

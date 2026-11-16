@@ -40,7 +40,9 @@ namespace SrtpAvatar
                 new LongTermMemoryStore(Path.Combine(DesktopMemoryDirectory, "simulation.json")));
             liveDesktopDialogue = new DialogueService(config, new DeepSeekDialogueClient(config),
                 new LongTermMemoryStore(Path.Combine(DesktopMemoryDirectory, "live.json")));
-            dialogueService = simulatedDialogue;
+            DesktopLiveMode = true;
+            History = liveDesktopHistory;
+            dialogueService = liveDesktopDialogue;
             GetComponent<AvatarTestPanel>()?.SetVisible(false);
         }
 
