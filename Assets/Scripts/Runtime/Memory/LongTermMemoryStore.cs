@@ -78,8 +78,8 @@ namespace SrtpAvatar
             try
             {
                 var json = JsonUtility.ToJson(updated, true);
-                WriteAtomically(filePath + ".bak", json, null);
-                WriteAtomically(filePath, json, null);
+                AtomicFile.WriteUtf8(filePath + ".bak", json);
+                AtomicFile.WriteUtf8(filePath, json);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
@@ -157,8 +157,8 @@ namespace SrtpAvatar
             var empty = new MemoryData();
             try
             {
-                WriteAtomically(filePath + ".bak", JsonUtility.ToJson(empty, true), null);
-                WriteAtomically(filePath, JsonUtility.ToJson(empty, true), null);
+                AtomicFile.WriteUtf8(filePath + ".bak", JsonUtility.ToJson(empty, true));
+                AtomicFile.WriteUtf8(filePath, JsonUtility.ToJson(empty, true));
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
@@ -215,7 +215,7 @@ namespace SrtpAvatar
         {
             try
             {
-                WriteAtomically(filePath, JsonUtility.ToJson(updated, true), recoveredFromBackup ? null : filePath + ".bak");
+                AtomicFile.WriteUtf8(filePath, JsonUtility.ToJson(updated, true), recoveredFromBackup ? null : filePath + ".bak");
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
@@ -223,28 +223,6 @@ namespace SrtpAvatar
             }
             data = updated;
             recoveredFromBackup = false;
-        }
-
-        private static void WriteAtomically(string target, string json, string backup)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target)));
-            var temporary = target + ".tmp";
-            // The old file stays intact until the flushed candidate is atomically replaced.
-            using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                var bytes = Encoding.UTF8.GetBytes(json);
-                stream.Write(bytes, 0, bytes.Length);
-                stream.Flush(true);
-            }
-            try
-            {
-                if (File.Exists(target)) File.Replace(temporary, target, backup);
-                else File.Move(temporary, target);
-            }
-            finally
-            {
-                if (File.Exists(temporary)) File.Delete(temporary);
-            }
         }
 
         private static bool RefreshDuplicate(List<MemoryItem> items, string text)

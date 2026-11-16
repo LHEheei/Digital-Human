@@ -10,8 +10,8 @@ namespace SrtpAvatarEditor
     {
         private static readonly string[] Modes = { "离线测试", "真实模型" };
         private static readonly string[] Scenarios = { "正常回复", "慢速分包", "首句后断流", "认证失败", "请求超时", "非法 JSON" };
-        private static readonly string[] Emotions = { "neutral", "joy", "angry", "sorrow", "fun", "surprised" };
-        private static readonly string[] Gestures = { "none", "nod", "wave", "think", "explain" };
+        private static readonly string[] Emotions = Enum.GetNames(typeof(AvatarEmotion));
+        private static readonly string[] Gestures = Enum.GetNames(typeof(AvatarGesture));
         [SerializeField] private string input = "";
         private DigitalHumanAppController controller;
         private Vector2 scroll;

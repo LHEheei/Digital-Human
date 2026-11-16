@@ -167,6 +167,39 @@ namespace SrtpAvatar.Tests
             Object.Destroy(owner);
             yield return null;
         }
+        [UnityTest] public IEnumerator NativeSpeechTimingStaysWithItsRecognitionSessionAndUtterance()
+        {
+            var owner = new GameObject("Speech timing callback regression");
+            try
+            {
+                var bridge = owner.AddComponent<AndroidNativeSpeechBridge>();
+                var completion = new TaskCompletionSource<SpeechRecognitionTurn>();
+                var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                typeof(AndroidNativeSpeechBridge).GetField("recognitionId", flags).SetValue(bridge, "current");
+                typeof(AndroidNativeSpeechBridge).GetField("recognitionCompletion", flags).SetValue(bridge, completion);
+                bridge.OnAndroidSpeechResult("previous\nvosk\t900\t1200\n旧内容");
+                Assert.IsFalse(completion.Task.IsCompleted);
+                bridge.OnAndroidSpeechAudio("current\nAQID");
+                bridge.OnAndroidSpeechResult("current\nvosk\t1300\t1800\n第一句\n第二句");
+                Assert.IsTrue(completion.Task.IsCompleted);
+                var turn = completion.Task.Result;
+                Assert.AreEqual("第一句\n第二句", turn.Text);
+                CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, turn.AudioWav);
+                Assert.AreEqual(SpeechRecognitionBackend.Vosk, turn.Backend);
+                Assert.AreEqual(1300L, turn.SpeechEndedAtMs);
+                Assert.AreEqual(1800L, turn.RecognitionCompletedAtMs);
+
+                typeof(AndroidNativeSpeechBridge).GetField("utteranceId", flags).SetValue(bridge, "utterance");
+                long? ttsStartedAt = null;
+                bridge.TtsStarted += timestamp => ttsStartedAt = timestamp;
+                bridge.OnAndroidTtsStarted("stale\n1900");
+                Assert.IsNull(ttsStartedAt);
+                bridge.OnAndroidTtsStarted("utterance\n2100");
+                Assert.AreEqual(2100L, ttsStartedAt);
+            }
+            finally { Object.Destroy(owner); }
+            yield return null;
+        }
         private AppConfig EnableListening()
         {
             var config = (AppConfig)Field("config");

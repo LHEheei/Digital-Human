@@ -191,7 +191,7 @@ namespace SrtpAvatar
             RuntimeSecrets.SaveDeepSeekSettings(safeBaseUrl, key, model);
             apiKeyInput.text = "";
             Object.FindAnyObjectByType<DigitalHumanAppController>()?.RefreshConversationSettings();
-            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时无法开始 AI 对话。" : "已保存 API 配置，正在准备语音对话。";
+            var saved = string.IsNullOrWhiteSpace(key) ? "已保存基础配置；未填写 Key 时无法开始 AI 对话。" : "已保存 API 配置。";
             SetFeedback(string.IsNullOrWhiteSpace(warning) ? saved : $"{saved}\n警告：{warning}");
         }
 

@@ -9,8 +9,8 @@ namespace SrtpAvatar
 {
     public sealed partial class DigitalHumanAppController
     {
-        private ConversationHistory simulatedHistory;
-        private readonly ConversationHistory liveDesktopHistory = new ConversationHistory();
+        private ConversationSessionStore simulatedSessions;
+        private ConversationSessionStore liveDesktopSessions;
         private DialogueService simulatedDialogue;
         private DialogueService liveDesktopDialogue;
         public SimulatedDialogueClient DesktopSimulation { get; private set; }
@@ -34,15 +34,16 @@ namespace SrtpAvatar
         private void InitializeDesktopDialogue()
         {
             DesktopMemoryDirectory = Path.Combine(Application.temporaryCachePath, "DialogueWorkbench", Guid.NewGuid().ToString("N"));
-            simulatedHistory = History;
+            simulatedSessions = new ConversationSessionStore(Path.Combine(DesktopMemoryDirectory, "simulation-conversations.json"));
+            liveDesktopSessions = new ConversationSessionStore(Path.Combine(DesktopMemoryDirectory, "live-conversations.json"));
             DesktopSimulation = new SimulatedDialogueClient();
             simulatedDialogue = new DialogueService(config, DesktopSimulation,
                 new LongTermMemoryStore(Path.Combine(DesktopMemoryDirectory, "simulation.json")));
             liveDesktopDialogue = new DialogueService(config, new DeepSeekDialogueClient(config),
                 new LongTermMemoryStore(Path.Combine(DesktopMemoryDirectory, "live.json")));
             DesktopLiveMode = true;
-            History = liveDesktopHistory;
             dialogueService = liveDesktopDialogue;
+            UseSessions(liveDesktopSessions);
             GetComponent<AvatarTestPanel>()?.SetVisible(false);
         }
 
@@ -51,13 +52,8 @@ namespace SrtpAvatar
             if (IsBusy) throw new InvalidOperationException("请先等待本轮完成或取消。");
             DesktopLiveMode = live;
             dialogueService = live ? liveDesktopDialogue : simulatedDialogue;
-            History = live ? liveDesktopHistory : simulatedHistory;
-            LastConversationError = AppErr.none;
-            LastErrorMessage = "";
-            LastPlaybackFailed = false;
-            LastDecision = null;
-            LastTiming = "";
-            ShowIdle();
+            UseSessions(live ? liveDesktopSessions : simulatedSessions);
+            ShowActiveSession();
         }
 
         public Task SubmitDesktopTextAsync(string text)

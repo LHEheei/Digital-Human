@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading.Tasks;
 using UnityEngine;
 
@@ -15,12 +16,24 @@ namespace SrtpAvatar
         private string utteranceId;
         private bool ttsSpeaking;
         private readonly TtsMouthTimeline mouthTimeline = new TtsMouthTimeline();
-        public event Action TtsStarted;
+        public event Action<long?> TtsStarted;
         public bool TryGetSpeechLevel(out float level) => mouthTimeline.TrySample(Time.realtimeSinceStartupAsDouble, out level);
 
 #if UNITY_ANDROID && !UNITY_EDITOR
         private AndroidJavaObject bridge;
+        private AndroidJavaClass timingClock;
 #endif
+
+        internal long GetTimingTimestampMilliseconds()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (this == null) return -1;
+            timingClock ??= new AndroidJavaClass("android.os.SystemClock");
+            return timingClock.CallStatic<long>("elapsedRealtime");
+#else
+            return (long)(Time.realtimeSinceStartupAsDouble * 1000);
+#endif
+        }
 
         public bool CanRecognize
         {
@@ -179,11 +192,11 @@ namespace SrtpAvatar
 
         public void OnAndroidTtsStarted(string callback)
         {
-            if (TryReadCallback(callback, utteranceId, out _))
+            if (TryReadCallback(callback, utteranceId, out var payload))
             {
                 ttsSpeaking = true;
                 mouthTimeline.Start(Time.realtimeSinceStartupAsDouble);
-                TtsStarted?.Invoke();
+                TtsStarted?.Invoke(ParseTimestamp(payload));
             }
         }
 
@@ -197,7 +210,7 @@ namespace SrtpAvatar
         public void OnAndroidTtsPlaybackPosition(string callback)
         {
             if (!TryReadCallback(callback, utteranceId, out var payload)) return;
-            if (float.TryParse(payload, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var seconds))
+            if (float.TryParse(payload, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
                 mouthTimeline.Align(Time.realtimeSinceStartupAsDouble, seconds);
         }
 
@@ -242,13 +255,37 @@ namespace SrtpAvatar
 
             if (error == null)
             {
-                completion.TrySetResult(new SpeechRecognitionTurn(text, audioWav));
+                completion.TrySetResult(ParseRecognitionTurn(text, audioWav));
             }
             else
             {
                 completion.TrySetException(new AppException(errorCode, error));
             }
         }
+
+        private static SpeechRecognitionTurn ParseRecognitionTurn(string payload, byte[] audioWav)
+        {
+            // Keep all timing markers and the transcript in one session-scoped result.
+            var headerEnd = payload.IndexOf(CallbackSeparator);
+            if (headerEnd > 0)
+            {
+                var header = payload.Substring(0, headerEnd).Split('\t');
+                if (header.Length == 3)
+                {
+                    var backend = header[0] == "vosk" ? SpeechRecognitionBackend.Vosk
+                        : header[0] == "android" ? SpeechRecognitionBackend.Android : SpeechRecognitionBackend.None;
+                    if (backend != SpeechRecognitionBackend.None)
+                    {
+                        return new SpeechRecognitionTurn(payload.Substring(headerEnd + 1), audioWav, backend,
+                            ParseTimestamp(header[1]) ?? -1, ParseTimestamp(header[2]) ?? -1);
+                    }
+                }
+            }
+            return new SpeechRecognitionTurn(payload, audioWav);
+        }
+
+        private static long? ParseTimestamp(string value) =>
+            long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var timestamp) ? timestamp : null;
 
         private void CompleteTts(string error)
         {
@@ -295,6 +332,8 @@ namespace SrtpAvatar
             CancelRecognition();
             StopSpeaking();
 #if UNITY_ANDROID && !UNITY_EDITOR
+            timingClock?.Dispose();
+            timingClock = null;
             if (bridge != null)
             {
                 bridge.Call("shutdown");

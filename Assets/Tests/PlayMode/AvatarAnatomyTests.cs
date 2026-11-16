@@ -42,11 +42,13 @@ namespace SrtpAvatar.Tests
             var pose = new HumanPose();
             using (var handler = new HumanPoseHandler(animator.avatar, animator.transform))
             {
-                foreach (var label in new[] { "idle", "listening", "thinking", "nod", "wave", "think", "explain" })
+                foreach (var label in new[] { "idle", "listening", "thinking", "nod", "wave", "think", "explain", "headtilt", "offer" })
                 {
                     bridge.PlayGesture(AvatarGesture.none);
                     bridge.SetState(AvatarState.idle);
                     for (var frame = 0; frame < 90; frame++) yield return null;
+                    var head = animator.GetBoneTransform(HumanBodyBones.Head);
+                    var restingHeadRoll = head.localEulerAngles.z;
                     if (Enum.TryParse<AvatarState>(label, out var state)) bridge.SetState(state);
                     else
                     {
@@ -64,6 +66,7 @@ namespace SrtpAvatar.Tests
                     var minimum = new float[names.Length];
                     var maximum = new float[names.Length];
                     for (var i = 0; i < names.Length; i++) { minimum[i] = float.MaxValue; maximum[i] = float.MinValue; }
+                    var peakFrame = label switch { "nod" => 28, "headtilt" => 49, "offer" => 62, _ => 72 };
                     for (var frame = 0; frame < 180; frame++)
                     {
                         yield return null;
@@ -82,7 +85,7 @@ namespace SrtpAvatar.Tests
                             minimum[i] = Mathf.Min(minimum[i], pose.muscles[i]);
                             maximum[i] = Mathf.Max(maximum[i], pose.muscles[i]);
                         }
-                        if (frame == (label == "nod" ? 28 : 72))
+                        if (frame == peakFrame)
                         {
                             report.AppendLine($"{label} peak bone positions (root space):");
                             foreach (var boneId in new[] { HumanBodyBones.Chest, HumanBodyBones.Head,
@@ -96,6 +99,22 @@ namespace SrtpAvatar.Tests
                             var peakFlex = Vector3.Angle(rightArm[1].position - rightArm[0].position, rightArm[2].position - rightArm[1].position);
                             if (label == "explain" && peakFlex < 40f)
                                 violations.Add($"Explain pose must bend its leading elbow, measured {peakFlex:F1} degrees.");
+                            if (label == "headtilt")
+                            {
+                                var roll = Mathf.Abs(Mathf.DeltaAngle(restingHeadRoll, head.localEulerAngles.z));
+                                Assert.That(roll, Is.InRange(3f, 9f), "A question tilts the head a little.");
+                                report.AppendLine($"  Head roll from rest: {roll:F1} degrees");
+                            }
+                            if (label == "offer")
+                            {
+                                var chest = animator.GetBoneTransform(HumanBodyBones.Chest);
+                                var handFromChest = bridge.transform.InverseTransformVector(rightArm[2].position - chest.position);
+                                Assert.That(handFromChest.y, Is.InRange(-0.20f, -0.05f), "The offering hand stays below chest level.");
+                                Assert.That(handFromChest.x, Is.GreaterThan(0.14f), "The offering hand stays out of the torso.");
+                                Assert.That(handFromChest.z, Is.GreaterThan(0.15f), "The offering hand stays in front of the torso.");
+                                Assert.That(peakFlex, Is.InRange(35f, 100f));
+                                report.AppendLine($"  Right wrist relative to chest: {handFromChest:F3}");
+                            }
                             report.AppendLine($"  Right elbow flexion: {peakFlex:F1} degrees");
                             if (!string.IsNullOrEmpty(directory)) CaptureAnatomyViews(directory, label);
                         }
@@ -123,7 +142,7 @@ namespace SrtpAvatar.Tests
             Assert.IsEmpty(violations, string.Join("\n", violations));
         }
 
-        private void CaptureAnatomyViews(string directory, string label)
+        private void CaptureAnatomyViews(string directory, string label, float centerHeight = 0.87f, float viewSize = 0.62f)
         {
             var oldPosition = camera.transform.position;
             var oldRotation = camera.transform.rotation;
@@ -135,9 +154,9 @@ namespace SrtpAvatar.Tests
             try
             {
                 camera.targetTexture = target;
-                camera.orthographicSize = 0.62f;
-                var center = new Vector3(0f, 0.87f, 0f);
-                var positions = new[] { new Vector3(0f, 0.87f, -3.2f), new Vector3(-2.3f, 0.87f, -2.3f), new Vector3(-3.2f, 0.87f, 0f) };
+                camera.orthographicSize = viewSize;
+                var center = new Vector3(0f, centerHeight, 0f);
+                var positions = new[] { new Vector3(0f, centerHeight, -3.2f), new Vector3(-2.3f, centerHeight, -2.3f), new Vector3(-3.2f, centerHeight, 0f) };
                 for (var i = 0; i < positions.Length; i++)
                 {
                     camera.transform.SetPositionAndRotation(positions[i], Quaternion.LookRotation(center - positions[i]));

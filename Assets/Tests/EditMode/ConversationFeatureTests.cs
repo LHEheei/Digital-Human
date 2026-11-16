@@ -83,7 +83,7 @@ namespace SrtpAvatar.Tests
             var planner = new SentenceMotionPlanner();
             var cue = planner.Plan("这段时间很不容易，我们慢慢来。", 0, 0,
                 new DialogueDecision { emotion = "angry", gesture = "wave" });
-            Assert.AreEqual(AvatarEmotion.neutral, cue.Emotion);
+            Assert.AreEqual(AvatarEmotion.concerned, cue.Emotion);
             Assert.AreEqual(AvatarGesture.nod, cue.Gesture);
             Assert.AreEqual(AvatarGesture.none, planner.Plan("我们继续。", 0, 20,
                 new DialogueDecision { emotion = "neutral", gesture = "think" }).Gesture);
@@ -105,6 +105,108 @@ namespace SrtpAvatar.Tests
             var third = history.Begin("第三轮"); history.Finish(third, AppErr.none, "", true);
             Assert.AreEqual(2, history.Turns.Count); Assert.AreSame(second, history.Turns[0]);
             Assert.AreEqual(ConversationTurnStatus.Completed, third.Status);
+        }
+
+        [Test] public void LocalSessionsRestoreActiveHistoryAndIndependentContext()
+        {
+            var store = new ConversationSessionStore(path);
+            var first = store.ActiveId;
+            AddSessionReply(store, "第一段聊天", "第一段回复");
+            store.Create();
+            var second = store.ActiveId;
+            Assert.IsEmpty(store.History.Turns);
+            Assert.AreEqual(0, store.Memory.Count);
+            AddSessionReply(store, "第二段聊天", "第二段回复");
+            var incomplete = store.History.Begin("网络失败");
+            store.History.UpdateReply(incomplete, "半句回复");
+            store.History.Finish(incomplete, AppErr.network, "网络中断", false);
+            store.History.Begin("尚未结束");
+            store.SaveActive();
+
+            var restored = new ConversationSessionStore(path);
+            Assert.AreEqual(second, restored.ActiveId);
+            Assert.AreEqual(2, restored.History.Turns.Count);
+            Assert.IsTrue(restored.History.CanRetry);
+            Assert.AreEqual("半句回复", restored.History.Latest.Reply);
+            Assert.AreEqual("网络中断", restored.History.Latest.ErrorMessage);
+            StringAssert.Contains("第二段聊天", restored.Memory.BuildContext(6));
+            StringAssert.DoesNotContain("第一段聊天", restored.Memory.BuildContext(6));
+            restored.Open(first);
+            Assert.AreEqual("第一段回复", restored.History.Latest.Reply);
+            Assert.AreEqual(first, new ConversationSessionStore(path).ActiveId);
+            StringAssert.DoesNotContain("第二段聊天", restored.Memory.BuildContext(6));
+        }
+
+        [Test] public void DeletingSessionsRemovesTheirContentsAndReplacesAnEmptyList()
+        {
+            var store = new ConversationSessionStore(path);
+            var first = store.ActiveId;
+            AddSessionReply(store, "要删除的记录", "旧回复");
+            store.Create();
+            var second = store.ActiveId;
+            store.Delete(first);
+            Assert.AreEqual(second, store.ActiveId);
+            Assert.AreEqual(1, store.GetSessions().Count);
+            StringAssert.DoesNotContain("要删除的记录", File.ReadAllText(path));
+            Assert.IsFalse(File.Exists(path + ".bak"));
+            store.Delete(second);
+            var restored = new ConversationSessionStore(path);
+            Assert.AreNotEqual(second, restored.ActiveId);
+            Assert.AreEqual(1, restored.GetSessions().Count);
+            Assert.IsEmpty(restored.History.Turns);
+        }
+
+        [Test] public void ClearingAllContextsKeepsVisibleHistoryAcrossSessions()
+        {
+            var store = new ConversationSessionStore(path);
+            var first = store.ActiveId;
+            AddSessionReply(store, "旧会话", "保留的第一段回复");
+            store.Create();
+            AddSessionReply(store, "当前会话", "保留的第二段回复");
+            store.ClearAllContexts();
+            Assert.AreEqual(0, store.Memory.Count);
+
+            var restored = new ConversationSessionStore(path);
+            Assert.AreEqual(0, restored.Memory.Count);
+            Assert.AreEqual("保留的第二段回复", restored.History.Latest.Reply);
+            restored.Open(first);
+            Assert.AreEqual(0, restored.Memory.Count);
+            Assert.AreEqual("保留的第一段回复", restored.History.Latest.Reply);
+        }
+
+        [Test] public void FailedSessionWriteRetainsTheActiveSessionForRetry()
+        {
+            var store = new ConversationSessionStore(path);
+            var id = store.ActiveId;
+            AddSessionReply(store, "原会话", "原回复");
+            store.SaveActive();
+            using (File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None))
+                Assert.AreEqual(AppErr.sessionStorage, Assert.Throws<AppException>(store.Create).Error);
+            Assert.AreEqual(id, store.ActiveId);
+            Assert.AreEqual("原回复", store.History.Latest.Reply);
+            Assert.AreEqual(1, new ConversationSessionStore(path).GetSessions().Count);
+            store.Create();
+            Assert.AreEqual(2, new ConversationSessionStore(path).GetSessions().Count);
+        }
+
+        [Test] public void UnreadableSessionArchiveIsPreservedWhileTemporarySessionsRemainUsable()
+        {
+            File.WriteAllText(path, "{broken");
+            var store = new ConversationSessionStore(path);
+            Assert.IsNotEmpty(store.LoadError);
+            store.Create();
+            AddSessionReply(store, "临时记录", "临时回复");
+            store.SaveActive();
+            Assert.AreEqual("临时回复", store.History.Latest.Reply);
+            Assert.AreEqual("{broken", File.ReadAllText(path));
+        }
+
+        private static void AddSessionReply(ConversationSessionStore store, string userText, string reply)
+        {
+            var turn = store.History.Begin(userText);
+            store.History.UpdateReply(turn, reply);
+            store.History.Finish(turn, AppErr.none, "", true);
+            store.Memory.Add(userText, new DialogueDecision { reply = reply }, 6);
         }
     }
 }

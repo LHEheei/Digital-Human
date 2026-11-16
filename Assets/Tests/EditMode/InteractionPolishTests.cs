@@ -38,6 +38,8 @@ namespace SrtpAvatar.Tests
         [TestCase("不要建议我休息。")]
         [TestCase("我们不需要慢慢来。")]
         [TestCase("“慢慢来”是这段话的标题。")]
+        [TestCase("不用说你觉得怎样？")]
+        [TestCase("我并非说可以试试。")]
         public void SimilarNegatedAndQuotedPhrasesDoNotTriggerLocalGestures(string text)
         {
             var cue = new SentenceMotionPlanner().Plan(text, 0, 0);
@@ -66,6 +68,17 @@ namespace SrtpAvatar.Tests
             Assert.AreEqual(AvatarGesture.nod, new SentenceMotionPlanner().Plan("明白了。", 0, 0).Gesture);
             Assert.AreEqual(AvatarGesture.nod, new SentenceMotionPlanner().Plan("不用担心，慢慢来。", 0, 0).Gesture);
             Assert.AreEqual(AvatarGesture.explain, new SentenceMotionPlanner().Plan("你提到“你好”，可以先说明使用场景。", 0, 0).Gesture);
+        }
+
+        [TestCase("谢谢你。", AvatarEmotion.softsmile, AvatarGesture.nod)]
+        [TestCase("听起来这段时间很不容易。", AvatarEmotion.concerned, AvatarGesture.nod)]
+        [TestCase("你愿意说说刚才发生了什么吗？", AvatarEmotion.neutral, AvatarGesture.headtilt)]
+        [TestCase("我们可以试试从一个小步骤开始。", AvatarEmotion.neutral, AvatarGesture.offer)]
+        public void NaturalConversationCuesDoNotRequireModelMetadata(string text, AvatarEmotion emotion, AvatarGesture gesture)
+        {
+            var cue = new SentenceMotionPlanner().Plan(text, 0, 0);
+            Assert.AreEqual(emotion, cue.Emotion);
+            Assert.AreEqual(gesture, cue.Gesture);
         }
         [Test] public void QuotedPhrasesStaySuppressedAcrossPlaybackSentences()
         {

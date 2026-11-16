@@ -46,7 +46,7 @@ public final class NativeSpeechBridge {
     private static final String OFFLINE_MODEL_STORAGE = "srtp-vosk-model";
     private static final float OFFLINE_SAMPLE_RATE = 16000.0f;
     private static final int OFFLINE_LISTEN_TIMEOUT_MILLIS = 15000;
-    private static final int OFFLINE_MAX_CAPTURE_MILLIS = 16000;
+    private static final int OFFLINE_MAX_CAPTURE_BYTES = (int) OFFLINE_SAMPLE_RATE * 2 * 16;
     private static final int OFFLINE_MAX_EMOTION_MILLIS = 8000;
     private static final int VOICE_ACTIVITY_SAMPLE_THRESHOLD = 350;
 
@@ -259,7 +259,7 @@ public final class NativeSpeechBridge {
 
                         @Override
                         public void onStart(String utteranceId) {
-                            send(utteranceId, "OnAndroidTtsStarted", "");
+                            send(utteranceId, "OnAndroidTtsStarted", Long.toString(SystemClock.elapsedRealtime()));
                         }
 
                         @Override
@@ -433,16 +433,18 @@ public final class NativeSpeechBridge {
     private void readOfflineAudio(String sessionId) {
         byte[] buffer = new byte[4096];
         long startedAt = SystemClock.elapsedRealtime();
+        long lastReadAt = -1;
         try {
             while (offlineListening && sessionId.equals(offlineSessionId) && offlineAudioRecord != null) {
                 int count = offlineAudioRecord.read(buffer, 0, buffer.length);
                 if (count > 0) {
+                    lastReadAt = SystemClock.elapsedRealtime();
                     appendOfflinePcm(buffer, count);
                     Recognizer recognizer = offlineRecognizer;
                     if (recognizer != null && recognizer.acceptWaveForm(buffer, count)) {
                         String text = extractVoskText(recognizer.getResult());
                         if (text.length() > 0) {
-                            finishOfflineRecognition(sessionId, text, null);
+                            finishOfflineRecognition(sessionId, text, null, lastReadAt);
                             return;
                         }
                     }
@@ -451,17 +453,17 @@ public final class NativeSpeechBridge {
                 if (SystemClock.elapsedRealtime() - startedAt >= OFFLINE_LISTEN_TIMEOUT_MILLIS) {
                     Recognizer recognizer = offlineRecognizer;
                     String finalText = recognizer == null ? "" : extractVoskText(recognizer.getFinalResult());
-                    finishOfflineRecognition(sessionId, finalText, finalText.length() == 0 ? "没有听到说话。" : null);
+                    finishOfflineRecognition(sessionId, finalText, finalText.length() == 0 ? "没有听到说话。" : null, lastReadAt);
                     return;
                 }
             }
         } catch (JSONException ex) {
             if (sessionId.equals(offlineSessionId)) {
-                finishOfflineRecognition(sessionId, null, "离线语音模型返回格式无效：" + safeExceptionMessage(ex));
+                finishOfflineRecognition(sessionId, null, "离线语音模型返回格式无效：" + safeExceptionMessage(ex), lastReadAt);
             }
         } catch (Throwable ex) {
             if (sessionId.equals(offlineSessionId)) {
-                finishOfflineRecognition(sessionId, null, "离线语音识别失败：" + safeThrowableMessage(ex));
+                finishOfflineRecognition(sessionId, null, "离线语音识别失败：" + safeThrowableMessage(ex), lastReadAt);
             }
         }
     }
@@ -471,8 +473,7 @@ public final class NativeSpeechBridge {
             return;
         }
 
-        int maximumBytes = (int) OFFLINE_SAMPLE_RATE * 2 * OFFLINE_MAX_CAPTURE_MILLIS / 1000;
-        int writable = Math.min(count, Math.max(0, maximumBytes - offlinePcm.size()));
+        int writable = Math.min(count, Math.max(0, OFFLINE_MAX_CAPTURE_BYTES - offlinePcm.size()));
         if (writable > 0) {
             offlinePcm.write(buffer, 0, writable);
         }
@@ -508,12 +509,27 @@ public final class NativeSpeechBridge {
         offlinePcm = null;
     }
 
-    private void finishOfflineRecognition(String sessionId, String text, String error) {
+    private void finishOfflineRecognition(String sessionId, String text, String error, long lastReadAt) {
         if (offlineSessionId == null || !offlineSessionId.equals(sessionId)) {
             return;
         }
 
-        byte[] speechWav = error == null && offlinePcm != null ? createSpeechWav(offlinePcm.toByteArray()) : null;
+        long recognizedAt = SystemClock.elapsedRealtime();
+        long speechEndedAt = -1;
+        byte[] speechWav = null;
+        ByteArrayOutputStream recorded = offlinePcm;
+        if (error == null && recorded != null) {
+            byte[] pcm = recorded.toByteArray();
+            int last = findActiveSample(pcm, pcm.length / 2 - 1, -1);
+            if (last >= 0) {
+                if (lastReadAt >= 0 && pcm.length < OFFLINE_MAX_CAPTURE_BYTES) {
+                    // Anchor the last active sample to the most recent AudioRecord read.
+                    int trailingSamples = pcm.length / 2 - last - 1;
+                    speechEndedAt = lastReadAt - Math.round(trailingSamples * 1000.0 / OFFLINE_SAMPLE_RATE);
+                }
+                speechWav = createSpeechWav(pcm, findActiveSample(pcm, 0, 1), last);
+            }
+        }
         stopOfflineRecognition();
         if (error != null) {
             send(sessionId, "OnAndroidSpeechError", error);
@@ -523,12 +539,12 @@ public final class NativeSpeechBridge {
             if (speechWav != null && speechWav.length > 0) {
                 send(sessionId, "OnAndroidSpeechAudio", Base64.encodeToString(speechWav, Base64.NO_WRAP));
             }
-            send(sessionId, "OnAndroidSpeechResult", text.trim());
+            sendSpeechResult(sessionId, "vosk", speechEndedAt, recognizedAt, text.trim());
         }
     }
 
-    private byte[] createSpeechWav(byte[] pcm) {
-        byte[] trimmed = trimPcmToSpeech(pcm);
+    private byte[] createSpeechWav(byte[] pcm, int first, int last) {
+        byte[] trimmed = trimPcmToSpeech(pcm, first, last);
         if (trimmed == null || trimmed.length < (int) OFFLINE_SAMPLE_RATE * 2) {
             return null;
         }
@@ -551,28 +567,20 @@ public final class NativeSpeechBridge {
         return wav.array();
     }
 
-    private byte[] trimPcmToSpeech(byte[] pcm) {
-        if (pcm == null || pcm.length < 2) {
-            return null;
-        }
-
+    private static int findActiveSample(byte[] pcm, int start, int step) {
         int sampleCount = pcm.length / 2;
-        int first = -1;
-        int last = -1;
-        for (int sample = 0; sample < sampleCount; sample++) {
+        for (int sample = start; sample >= 0 && sample < sampleCount; sample += step) {
             int byteIndex = sample * 2;
             short value = (short) ((pcm[byteIndex] & 0xff) | (pcm[byteIndex + 1] << 8));
             if (Math.abs((int) value) >= VOICE_ACTIVITY_SAMPLE_THRESHOLD) {
-                if (first < 0) {
-                    first = sample;
-                }
-                last = sample;
+                return sample;
             }
         }
-        if (first < 0) {
-            return null;
-        }
+        return -1;
+    }
 
+    private byte[] trimPcmToSpeech(byte[] pcm, int first, int last) {
+        int sampleCount = pcm.length / 2;
         int padding = (int) (OFFLINE_SAMPLE_RATE * 0.25f);
         int minimumSamples = (int) OFFLINE_SAMPLE_RATE;
         int maximumSamples = (int) OFFLINE_SAMPLE_RATE * OFFLINE_MAX_EMOTION_MILLIS / 1000;
@@ -685,9 +693,14 @@ public final class NativeSpeechBridge {
         UnityPlayer.UnitySendMessage(unityObjectName, method, (callbackId == null ? "" : callbackId) + "\n" + (message == null ? "" : message));
     }
 
+    private void sendSpeechResult(String sessionId, String backend, long speechEndedAt, long recognizedAt, String text) {
+        send(sessionId, "OnAndroidSpeechResult", backend + "\t" + speechEndedAt + "\t" + recognizedAt + "\n" + text);
+    }
+
     private final class UnityRecognitionListener implements RecognitionListener {
         private final String sessionId;
         private String lastPartialResult = "";
+        private long speechEndedAt = -1;
 
         UnityRecognitionListener(String sessionId) {
             this.sessionId = sessionId;
@@ -702,7 +715,11 @@ public final class NativeSpeechBridge {
         @Override public void onBeginningOfSpeech() { }
         @Override public void onRmsChanged(float rmsdB) { }
         @Override public void onBufferReceived(byte[] buffer) { }
-        @Override public void onEndOfSpeech() { }
+        @Override public void onEndOfSpeech() {
+            if (sessionId.equals(activeSystemSessionId)) {
+                speechEndedAt = SystemClock.elapsedRealtime();
+            }
+        }
 
         @Override
         public void onError(int error) {
@@ -714,7 +731,7 @@ public final class NativeSpeechBridge {
             // Some recognizers emit a partial transcript, then end with an
             // error instead of onResults. Retain that real user speech.
             if (lastPartialResult.length() > 0) {
-                send(sessionId, "OnAndroidSpeechResult", lastPartialResult);
+                sendSpeechResult(sessionId, "android", speechEndedAt, SystemClock.elapsedRealtime(), lastPartialResult);
                 return;
             }
             if ((error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT)
@@ -732,13 +749,14 @@ public final class NativeSpeechBridge {
             }
 
             activeSystemSessionId = null;
+            long recognizedAt = SystemClock.elapsedRealtime();
             ArrayList<String> matches = results == null ? null : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
             if (matches != null && matches.size() > 0 && matches.get(0) != null && matches.get(0).trim().length() > 0) {
-                send(sessionId, "OnAndroidSpeechResult", matches.get(0).trim());
+                sendSpeechResult(sessionId, "android", speechEndedAt, recognizedAt, matches.get(0).trim());
                 return;
             }
             if (lastPartialResult.length() > 0) {
-                send(sessionId, "OnAndroidSpeechResult", lastPartialResult);
+                sendSpeechResult(sessionId, "android", speechEndedAt, recognizedAt, lastPartialResult);
                 return;
             }
             send(sessionId, "OnAndroidSpeechError", "没有识别到语音内容。");

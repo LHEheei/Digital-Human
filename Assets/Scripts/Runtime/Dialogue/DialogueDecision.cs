@@ -9,7 +9,9 @@ namespace SrtpAvatar
         angry,
         sorrow,
         fun,
-        surprised
+        surprised,
+        softsmile,
+        concerned
     }
 
     public enum AvatarGesture
@@ -18,7 +20,9 @@ namespace SrtpAvatar
         nod,
         wave,
         think,
-        explain
+        explain,
+        headtilt,
+        offer
     }
 
     public enum AvatarState
@@ -53,12 +57,12 @@ namespace SrtpAvatar
 
         private static T ParseEnum<T>(string value, T fallback) where T : struct
         {
-            return Enum.TryParse(value, true, out T parsed) ? parsed : fallback;
+            return Enum.TryParse(value, true, out T parsed) && Enum.IsDefined(typeof(T), parsed) ? parsed : fallback;
         }
 
         private static string NormalizeEnum<T>(string value, T fallback) where T : struct
         {
-            return Enum.TryParse(value, true, out T parsed) ? parsed.ToString().ToLowerInvariant() : fallback.ToString().ToLowerInvariant();
+            return ParseEnum(value, fallback).ToString().ToLowerInvariant();
         }
     }
 }

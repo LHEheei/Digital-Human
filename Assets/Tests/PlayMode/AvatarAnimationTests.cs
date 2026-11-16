@@ -145,6 +145,59 @@ namespace SrtpAvatar.Tests
         }
 
         [UnityTest]
+        public IEnumerator SubtleExpressionsMoveTheExpectedFaceRegionsAndReleaseDuringListening()
+        {
+            var mesh = face.transform.Find("Face").GetComponent<SkinnedMeshRenderer>();
+            var smile = mesh.sharedMesh.GetBlendShapeIndex("Fcl_MTH_Up");
+            var brow = mesh.sharedMesh.GetBlendShapeIndex("Fcl_BRW_Sorrow");
+            Assert.That(smile, Is.GreaterThanOrEqualTo(0));
+            Assert.That(brow, Is.GreaterThanOrEqualTo(0));
+            var directory = Environment.GetEnvironmentVariable("SRTP_ANATOMY_REPORT");
+            var head = animator.GetBoneTransform(HumanBodyBones.Head);
+            bridge.SetState(AvatarState.speaking);
+            bridge.SetEmotion(AvatarEmotion.softsmile);
+            for (var frame = 0; frame < 60; frame++) yield return null;
+            var restingSmile = mesh.GetBlendShapeWeight(smile);
+            Assert.That(restingSmile, Is.InRange(30f, 53f));
+            Assert.Less(mesh.GetBlendShapeWeight(brow), 0.1f);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+                CaptureAnatomyViews(directory, "softsmile", head.position.y + 0.1f, 0.24f);
+            }
+
+            bridge.SetSpeechLevel(0.9f);
+            for (var frame = 0; frame < 36; frame++) yield return null;
+            Assert.Less(mesh.GetBlendShapeWeight(smile), restingSmile - 3f);
+            Assert.Greater(face.GetValue(BlendShapeKey.CreateFromPreset(BlendShapePreset.A)), 0.1f);
+
+            bridge.SetSpeechLevel(0f);
+            bridge.SetEmotion(AvatarEmotion.concerned);
+            for (var frame = 0; frame < 60; frame++) yield return null;
+            Assert.That(mesh.GetBlendShapeWeight(brow), Is.InRange(30f, 57f));
+            Assert.Less(mesh.GetBlendShapeWeight(smile), 3f);
+            Assert.Less(face.GetValue(BlendShapeKey.CreateFromPreset(BlendShapePreset.A)), 0.025f);
+            if (!string.IsNullOrEmpty(directory)) CaptureAnatomyViews(directory, "concerned", head.position.y + 0.1f, 0.24f);
+
+            bridge.SetState(AvatarState.listening);
+            for (var frame = 0; frame < 90; frame++) yield return null;
+            Assert.Less(mesh.GetBlendShapeWeight(brow), 1f);
+        }
+
+        [UnityTest]
+        public IEnumerator SurpriseRelaxesDuringAContinuingReply()
+        {
+            var surprise = BlendShapeKey.CreateUnknown("Surprised");
+            bridge.SetState(AvatarState.speaking);
+            bridge.SetEmotion(AvatarEmotion.surprised);
+            for (var frame = 0; frame < 36; frame++) yield return null;
+            Assert.That(face.GetValue(surprise), Is.InRange(0.25f, 0.54f));
+            bridge.SetEmotion(AvatarEmotion.surprised);
+            for (var frame = 0; frame < 92; frame++) yield return null;
+            Assert.Less(face.GetValue(surprise), 0.02f);
+        }
+
+        [UnityTest]
         public IEnumerator PreviewConversationMotion()
         {
             var directory = Environment.GetEnvironmentVariable("SRTP_AVATAR_PREVIEW");

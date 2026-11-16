@@ -10,7 +10,8 @@ namespace SrtpAvatar
     {
         private readonly AppConfig config;
         private readonly IDialogueClient dialogueClient;
-        private readonly ConversationMemory conversationMemory;
+        private ConversationMemory conversationMemory;
+        private Action clearSessionContexts;
         private readonly LongTermMemoryStore longTermMemory;
 
         public DialogueService(AppConfig config, IDialogueClient client = null, LongTermMemoryStore memoryStore = null)
@@ -31,6 +32,12 @@ namespace SrtpAvatar
         public void UpdateMemoryEntry(string id, string text) => longTermMemory.UpdateEntry(id, text);
         public void DeleteMemoryEntry(string id) => longTermMemory.DeleteEntry(id);
 
+        internal void BindSessionMemory(ConversationMemory memory, Action clearAllContexts)
+        {
+            conversationMemory = memory;
+            clearSessionContexts = clearAllContexts;
+        }
+
         public Task<DialogueDecision> DecideAsync(string userText, CancellationToken cancellationToken = default)
         {
             return DecideAsync(new TalkInput { text = userText }, cancellationToken);
@@ -49,7 +56,11 @@ namespace SrtpAvatar
             var clearScope = ConversationMemory.GetClearScope(userText);
             if (clearScope != MemoryClearScope.None)
             {
-                if (clearScope == MemoryClearScope.All) longTermMemory.Clear();
+                if (clearScope == MemoryClearScope.All)
+                {
+                    clearSessionContexts?.Invoke();
+                    longTermMemory.Clear();
+                }
                 conversationMemory.Clear();
                 return new DialogueDecision
                 {

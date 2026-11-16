@@ -15,6 +15,12 @@ namespace SrtpAvatar
 
         private readonly List<Turn> turns = new List<Turn>();
 
+        public ConversationMemory() { }
+
+        internal ConversationMemory(List<Turn> saved) => turns.AddRange(saved);
+
+        internal List<Turn> Capture() => new List<Turn>(turns);
+
         public int Count => turns.Count;
 
         public void Add(string userText, DialogueDecision decision, int maxTurns)
@@ -81,7 +87,8 @@ namespace SrtpAvatar
             }
         }
 
-        private sealed class Turn
+        [Serializable]
+        internal sealed class Turn
         {
             public string userText;
             public string reply;

@@ -4,6 +4,9 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -137,6 +140,136 @@ namespace SrtpAvatar.Tests
             Assert.AreEqual(0, app.GetMemoryEntries().Count);
             app.SelectDesktopMode(false); Assert.AreEqual(1, app.History.Turns.Count);
             Assert.AreEqual(1, app.GetMemoryEntries().Count);
+        }
+
+        [UnityTest] public IEnumerator SessionsPanelCreatesSwitchesAndDeletesPersistedConversations()
+        {
+            var first = app.ActiveSessionId;
+            app.DesktopSimulation.Memory = "用户喜欢古典音乐";
+            var initial = app.SubmitDesktopTextAsync("第一个会话的话题");
+            yield return Until(() => initial.IsCompleted);
+            Assert.IsFalse(initial.IsFaulted);
+            Assert.AreEqual(1, app.DesktopDialogue.RecentTurnCount);
+
+            panel.MessageInput.text = "旧会话的草稿";
+            panel.SessionsButton.onClick.Invoke();
+            var sessions = panel.SessionsPanel;
+            Assert.IsTrue(sessions.IsOpen);
+            sessions.NewButton.onClick.Invoke();
+            yield return null;
+            var second = app.ActiveSessionId;
+            Assert.AreNotEqual(first, second);
+            Assert.IsFalse(sessions.IsOpen);
+            Assert.IsEmpty(panel.MessageInput.text);
+            Assert.IsEmpty(app.History.Turns);
+            Assert.AreEqual(0, app.DesktopDialogue.RecentTurnCount);
+            Assert.AreEqual(1, app.GetMemoryEntries().Count);
+
+            var next = app.SubmitDesktopTextAsync("第二个会话的话题");
+            yield return Until(() => next.IsCompleted);
+            Assert.IsFalse(next.IsFaulted);
+            panel.SessionsButton.onClick.Invoke();
+            yield return Capture("sessions-portrait", 720, 1280);
+            yield return Capture("sessions-landscape", 1280, 720);
+            FindSessionRow(sessions, first).onClick.Invoke();
+            Assert.IsTrue(sessions.OpenButton.interactable);
+            sessions.OpenButton.onClick.Invoke();
+            yield return null;
+            Assert.AreEqual(first, app.ActiveSessionId);
+            Assert.AreEqual("第一个会话的话题", app.History.Latest.UserText);
+            StringAssert.DoesNotContain("第二个会话的话题", app.DesktopDialogue.RecentContext);
+
+            panel.SessionsButton.onClick.Invoke();
+            FindSessionRow(sessions, second).onClick.Invoke();
+            sessions.DeleteButton.onClick.Invoke();
+            Assert.AreEqual(2, app.GetSessions().Count);
+            sessions.DeleteButton.onClick.Invoke();
+            Assert.AreEqual(1, app.GetSessions().Count);
+            var restored = new ConversationSessionStore(Path.Combine(app.DesktopMemoryDirectory, "simulation-conversations.json"));
+            Assert.AreEqual(first, restored.ActiveId);
+            Assert.AreEqual(1, restored.GetSessions().Count);
+            Assert.AreEqual("第一个会话的话题", restored.History.Latest.UserText);
+            Assert.AreEqual(1, app.GetMemoryEntries().Count);
+        }
+
+        private static Button FindSessionRow(ConversationSessionsPanel panel, string id) =>
+            Array.Find(panel.GetComponentsInChildren<Button>(), button => button.name == "Session " + id);
+
+        [UnityTest] public IEnumerator TapSpeechFillsAnEditableDraftAndWaitsForSend()
+        {
+            var recognition = new TaskCompletionSource<SpeechRecognitionTurn>();
+            SetRecognizer((_, token, ready) => { ready(); return recognition.Task; });
+            panel.InputModeButton.onClick.Invoke();
+            yield return Capture("input-mode-portrait", 720, 1280);
+            SelectInputMode("点按说话");
+            yield return null;
+            Assert.AreEqual(SpeechInputMode.TapToSpeak, app.InputMode);
+            Assert.IsTrue(panel.DictationButton.gameObject.activeSelf);
+            yield return Capture("tap-to-speak-landscape", 1280, 720);
+            panel.DictationButton.onClick.Invoke();
+            yield return Until(() => app.ListeningPhase == SpeechListeningPhase.Ready);
+            Assert.IsTrue(app.IsDictating);
+            Assert.IsFalse(app.CanSubmitText);
+            recognition.SetResult(new SpeechRecognitionTurn("语音转成的草稿", null));
+            yield return Until(() => panel.MessageInput.text == "语音转成的草稿");
+            Assert.IsEmpty(app.History.Turns);
+            Assert.AreEqual(0, app.DesktopDialogue.RecentTurnCount);
+            panel.MessageInput.text = "修改后发送的草稿";
+            panel.SendButton.onClick.Invoke();
+            yield return Until(() => !app.IsBusy);
+            Assert.AreEqual("修改后发送的草稿", app.History.Latest.UserText);
+            Assert.AreEqual(ConversationTurnStatus.Completed, app.History.Latest.Status);
+        }
+
+        [UnityTest] public IEnumerator SwitchingFromTapToTextDiscardsLateSpeechAndKeepsTheDraft()
+        {
+            var recognition = new TaskCompletionSource<SpeechRecognitionTurn>();
+            var calls = 0;
+            CancellationToken activeCapture = default;
+            SetRecognizer((_, token, ready) =>
+            {
+                calls++;
+                activeCapture = token;
+                ready();
+                return calls == 1 ? recognition.Task : Task.FromResult(new SpeechRecognitionTurn("自动识别发送", null));
+            });
+            app.SetInputMode(SpeechInputMode.TapToSpeak);
+            var config = (AppConfig)typeof(DigitalHumanAppController).GetField("config", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(app);
+            config.enableAutoConversation = true;
+            config.deepSeekApiKey = "local-test-only";
+            panel.MessageInput.text = "保留的文字草稿";
+            panel.DictationButton.onClick.Invoke();
+            yield return Until(() => app.IsDictating && calls == 1);
+            panel.InputModeButton.onClick.Invoke();
+            SelectInputMode("仅文字");
+            Assert.IsTrue(activeCapture.IsCancellationRequested);
+            recognition.SetResult(new SpeechRecognitionTurn("已经取消的识别结果", null));
+            yield return Until(() => !app.IsDictating);
+            yield return null;
+            Assert.AreEqual(SpeechInputMode.TextOnly, app.InputMode);
+            Assert.AreEqual(1, calls);
+            Assert.IsFalse(panel.DictationButton.gameObject.activeSelf);
+            Assert.AreEqual("保留的文字草稿", panel.MessageInput.text);
+            Assert.IsEmpty(app.History.Turns);
+
+            panel.InputModeButton.onClick.Invoke();
+            SelectInputMode("自动识别");
+            yield return Until(() => app.History.Latest?.Status == ConversationTurnStatus.Completed && !app.IsBusy);
+            Assert.AreEqual("自动识别发送", app.History.Latest.UserText);
+            app.SetInputMode(SpeechInputMode.TextOnly);
+        }
+
+        private void SetRecognizer(Func<Action<string>, CancellationToken, Action, Task<SpeechRecognitionTurn>> fake)
+        {
+            typeof(DigitalHumanAppController).GetField("recognizeSpeech", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(app, fake);
+        }
+
+        private void SelectInputMode(string name)
+        {
+            var overlay = panel.InputModeButton.transform.parent.parent.Find("Input Mode Overlay");
+            var choice = Array.Find(overlay.GetComponentsInChildren<Button>(), button => button.name == name);
+            Assert.IsNotNull(choice);
+            choice.onClick.Invoke();
         }
         [UnityTest] public IEnumerator LongHistoryScrollsAndPortraitLandscapeAndMemoryLayoutsRender()
         {

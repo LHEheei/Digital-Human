@@ -29,13 +29,28 @@ namespace SrtpAvatar
                 emotion = AvatarEmotion.joy;
                 if (sentenceIndex == 0) gesture = AvatarGesture.wave;
             }
-            else if (ContainsAffirmedPhrase(text, "不容易", "我理解你的", "让你难过", "让你失望", "陪着你", "慢慢来"))
+            else if (ContainsAffirmedPhrase(text, "不容易", "让你难过", "让你失望"))
+            {
+                emotion = AvatarEmotion.concerned;
+                gesture = AvatarGesture.nod;
+            }
+            else if (ContainsAffirmedPhrase(text, "我理解你的", "陪着你", "慢慢来"))
             {
                 emotion = AvatarEmotion.neutral;
                 gesture = AvatarGesture.nod;
             }
-            else if (StartsWithPhrase(text, false, "好的", "是的", "明白", "明白了", "没问题", "谢谢", "谢谢你", "谢谢您", "我理解"))
+            else if (StartsWithPhrase(text, false, "谢谢", "谢谢你", "谢谢您", "很高兴能帮上忙", "很高兴能帮到你"))
+            {
+                emotion = AvatarEmotion.softsmile;
                 gesture = AvatarGesture.nod;
+            }
+            else if (StartsWithPhrase(text, false, "好的", "是的", "明白", "明白了", "没问题", "我理解"))
+                gesture = AvatarGesture.nod;
+            else if ((text.EndsWith("？", StringComparison.Ordinal) || text.EndsWith("?", StringComparison.Ordinal)) &&
+                ContainsAffirmedPhrase(text, "你愿意说说", "你想先聊", "你想从哪里", "你更倾向于", "你觉得"))
+                gesture = AvatarGesture.headtilt;
+            else if (ContainsAffirmedPhrase(text, "可以试试", "不妨试试"))
+                gesture = AvatarGesture.offer;
             else if (ContainsAffirmedPhrase(text, "因为", "所以", "例如", "比如", "首先", "其次", "建议", "可以先", "分为"))
                 gesture = AvatarGesture.explain;
             else if (sentenceIndex == 0 && decision != null && decision.ParsedGesture != AvatarGesture.think)

@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
@@ -157,6 +159,95 @@ namespace SrtpAvatar.Tests
             Assert.AreEqual("你好", turn.Text);
             Assert.IsTrue(turn.HasAudio);
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, turn.AudioWav);
+        }
+
+        [Test]
+        public void OnDeviceEmotionUsesOnlyThisTurnsVoiceAndRebuildsFusion()
+        {
+            var owner = new GameObject();
+            owner.SetActive(false);
+            var config = ScriptableObject.CreateInstance<AppConfig>();
+            try
+            {
+                config.enableEmotionPerception = true;
+                config.emotionRuntimeMode = EmotionRuntimeMode.AndroidOnDeviceFace;
+                var perception = owner.AddComponent<EmotionPerceptionController>();
+                perception.Initialize(config);
+                var now = EmotionTime.UtcNowUnixMs;
+                var previousVoice = new UserEmo { source = "voice", label = "sorrow", score = .99f, capturedAtUnixMs = now };
+                var previousFusion = new UserEmo { source = "fusion", label = "sorrow", score = .99f, capturedAtUnixMs = now };
+                typeof(EmotionPerceptionController).GetProperty(nameof(perception.VoiceEmotion)).SetValue(perception, previousVoice);
+                typeof(EmotionPerceptionController).GetProperty(nameof(perception.FusionEmotion)).SetValue(perception, previousFusion);
+
+                var noCurrentSample = perception.ApplyLatest(new TalkInput { text = "这轮没有音频" });
+                Assert.IsNull(noCurrentSample.voiceEmo);
+                Assert.IsNull(noCurrentSample.fusionEmo);
+
+                var face = new UserEmo { source = "face", label = "joy", score = .65f, capturedAtUnixMs = now };
+                typeof(EmotionPerceptionController).GetProperty(nameof(perception.FaceEmotion)).SetValue(perception, face);
+                var faceOnly = perception.ApplyLatest(new TalkInput { text = "本轮情绪分析超时" });
+                Assert.IsNull(faceOnly.voiceEmo);
+                Assert.AreEqual("joy", faceOnly.fusionEmo.label);
+
+                var currentVoice = new UserEmo { source = "voice", label = "angry", score = .95f, capturedAtUnixMs = now };
+                var current = perception.ApplyLatest(new TalkInput { text = "本轮有语音线索" }, currentVoice);
+                Assert.AreSame(currentVoice, current.voiceEmo);
+                Assert.AreEqual("angry", current.fusionEmo.label);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+                UnityEngine.Object.DestroyImmediate(config);
+            }
+        }
+
+        [Test]
+        public async Task VoiceEmotionWaitUsesOnlyResultsCompletedBeforeItsBudget()
+        {
+            var method = typeof(DigitalHumanAppController).GetMethod("WaitBrieflyForVoiceEmotionAsync", BindingFlags.Static | BindingFlags.NonPublic);
+            var result = new UserEmo { source = "voice", label = "joy", score = .9f };
+            var immediate = (Task<UserEmo>)method.Invoke(null, new object[] { Task.FromResult(result), CancellationToken.None });
+            Assert.AreSame(result, await immediate);
+
+            var pending = new TaskCompletionSource<UserEmo>();
+            var waited = (Task<UserEmo>)method.Invoke(null, new object[] { pending.Task, CancellationToken.None });
+            Assert.IsNull(await waited);
+            pending.SetResult(result);
+            Assert.IsNull(await waited);
+        }
+
+        [TestCase(SpeechRecognitionBackend.Android)]
+        [TestCase(SpeechRecognitionBackend.Vosk)]
+        public void ConversationTiming_UsesNativeMarkersAndKeepsFirstTtsStart(SpeechRecognitionBackend backend)
+        {
+            long now = 1_600;
+            var turn = new SpeechRecognitionTurn("语音内容", null, backend, 1_000, 1_550);
+            var timing = new ConversationTiming(turn, () => now);
+            timing.MarkEmotionReady();
+            now = 1_900;
+            timing.MarkFirstSentence();
+            now = 2_100;
+            timing.MarkFirstAudio(2_030);
+            timing.MarkFirstAudio(2_090);
+            now = 2_200;
+            timing.MarkModelReady();
+
+            var log = timing.ToString();
+            StringAssert.Contains($"asr={backend} speechEndToAsr=550", log);
+            StringAssert.Contains("inputToEmotionReady=50 inputToFirstSentence=350 inputToModelComplete=650", log);
+            StringAssert.Contains("inputToFirstTts=480 speechEndToFirstTts=1030 inputToEnd=650", log);
+            StringAssert.DoesNotContain(turn.Text, log);
+        }
+
+        [TestCase(SpeechRecognitionBackend.None, -1L)]
+        [TestCase(SpeechRecognitionBackend.Android, 1_500L)]
+        public void ConversationTiming_LeavesUnavailableStagesUnset(SpeechRecognitionBackend backend, long recognizedAtMs)
+        {
+            var turn = new SpeechRecognitionTurn("内容", null, backend, -1, recognizedAtMs);
+            var log = new ConversationTiming(turn, () => 1_600).ToString();
+            StringAssert.Contains("speechEndToAsr=-1", log);
+            StringAssert.Contains("inputToFirstSentence=-1", log);
+            StringAssert.Contains("inputToFirstTts=-1 speechEndToFirstTts=-1", log);
         }
         [Test]
         public void CoreServices_RejectMissingConfiguration()

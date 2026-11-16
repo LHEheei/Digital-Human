@@ -61,6 +61,14 @@ powershell -File Tools/Validate-EmotionPipeline.ps1 -SkipEmotionService
 4. 相机帧率、内存、机身温度及端侧情绪推理，检查模型与材质显示。
 5. 设备文件系统上的记忆写入、损坏恢复与明确清除。
 
+### Android 对话延迟
+
+连接目标手机并安装开发包后，在 PowerShell 中运行 `adb logcat -v brief -s Unity | Select-String 'Conversation timing \(ms\)'`。使用同一台手机、同一语音服务和网络，连续说一组固定长度的句子。记录成功轮次的耗时分布，另外记录取消、播放失败、权限恢复和切换前后台后的首个成功轮次。
+
+- `speechEndToAsr` 记录语音结束到识别完成。`asr=Android` 使用系统语音结束回调，`asr=Vosk` 根据最后一次录音读取时刻和 PCM 中最后一个达到音量阈值的采样点估算语音结束。两类来源分开统计。环境噪声和录音缓冲会影响 Vosk 估计。
+- `inputToFirstSentence`、`inputToModelComplete` 和 `inputToFirstTts` 从识别完成起算。文字输入以开始处理该轮为起点。`speechEndToFirstTts` 记录语音结束到首个 TTS 启动回调的总耗时，该回调代表系统报告的启动时刻。
+- `-1` 表示阶段未到达或时间不可用。统计成功播报时筛选 `outcome=none` 和 `playbackFailed=False`，跳过该指标为 `-1` 的样本。日志中的耗时为毫秒，字段中没有原始音频、对话文本或 API Key。
+
 口型目前同步音量与停顿，并非逐音素的唇形。Android 的音频回调可能早于实际播放，播放位置校准取决于引擎是否提供范围回调，因此实现使用独立音频时间轴。依据：[Android UtteranceProgressListener](https://developer.android.com/reference/android/speech/tts/UtteranceProgressListener)。
 
 流式解析遵循 SSE 增量与 `[DONE]` 终止协议，并将 token 截断视为不完整回复。启用小车通信时仍走完整响应流程，保留已有指令执行顺序。依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)。流式播报可能已读出部分内容后才发现后续响应不完整，此时停止剩余播报、不提交该轮记忆；不会把不完整动作元数据发给小车。

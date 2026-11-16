@@ -16,7 +16,8 @@ namespace SrtpAvatar
         car,
         canceled,
         unknown,
-        memory
+        memory,
+        sessionStorage
     }
 
     public sealed class AppException : Exception

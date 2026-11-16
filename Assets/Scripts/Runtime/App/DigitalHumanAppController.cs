@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Text;
 using System.Threading.Tasks;
@@ -49,7 +50,9 @@ namespace SrtpAvatar
 
         public bool NeedsDialogueConfiguration => !dialogueService.CanUseDeepSeek;
         private bool CanUseDeepSeek => config.HasDeepSeekKey;
-        private bool CanAutoListen => !listeningNeedsManualRetry && !manualSubmissionPending && !textInputFocused && !memoryPanelOpen && config.enableAutoConversation && isActiveAndEnabled && !isDestroyed && CanUseDeepSeek && isApplicationActive && config.preferAndroidNativeSpeech;
+        private bool CanAutoListen => InputMode == SpeechInputMode.Automatic && !IsDictating && !inputModePickerOpen &&
+            !listeningNeedsManualRetry && !manualSubmissionPending && !textInputFocused && !memoryPanelOpen && !sessionsPanelOpen &&
+            isActiveAndEnabled && !isDestroyed && CanUseDeepSeek && isApplicationActive && config.preferAndroidNativeSpeech;
 
         private void Awake()
         {
@@ -57,13 +60,16 @@ namespace SrtpAvatar
 #if UNITY_EDITOR
             PrepareDesktopConfig();
 #endif
+            LoadInputMode();
             EnsureRuntimeComponents();
             speechService = new SpeechService(config, androidSpeech);
+            recognizeSpeech = speechService.ListenForUserTurnAsync;
             androidSpeech.TtsStarted += OnTtsStarted;
 #if UNITY_EDITOR
             InitializeDesktopDialogue();
 #else
             dialogueService = new DialogueService(config);
+            UseSessions(new ConversationSessionStore(Path.Combine(Application.persistentDataPath, "avatar_conversations.json")));
 #endif
             carCommunicationService = new CarCommunicationService(config, androidCar);
             ui = new AppUi(statusText, subtitleText, hintText);
@@ -84,6 +90,7 @@ namespace SrtpAvatar
 
         public void RefreshConversationSettings()
         {
+            CancelDictation();
             ResetListeningRecovery();
             ListeningErrorMessage = "";
             StopAutoListening();
@@ -93,17 +100,7 @@ namespace SrtpAvatar
 
         private async Task RunAutomaticListeningTurnAsync(CancellationToken cancellationToken)
         {
-            BeginListeningPresentation();
-            emotionPerception?.SuspendAudioCapture();
-            SpeechRecognitionTurn userTurn;
-            try
-            {
-                userTurn = await speechService.ListenForUserTurnAsync(SetSubtitle, cancellationToken, () => OnRecognitionReady(cancellationToken));
-            }
-            finally
-            {
-                if (isApplicationActive && !isDestroyed) emotionPerception?.ResumeAudioCapture();
-            }
+            var userTurn = await CaptureSpeechAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             ResetListeningRecovery();
             if (userTurn != null && AutoConversationPolicy.HasUsableText(userTurn.Text))
@@ -124,20 +121,21 @@ namespace SrtpAvatar
             ListeningPhase = SpeechListeningPhase.Inactive;
             BeginTurnRecord(userTurn.Text);
             ResetSentencePlayback();
-            conversationTiming = new ConversationTiming();
             try
             {
+                conversationTiming = new ConversationTiming(userTurn, androidSpeech.GetTimingTimestampMilliseconds);
+                UserEmo turnVoice = null;
                 if (emotionPerception != null && userTurn.HasAudio)
                 {
                     // Voice emotion runs locally and can take longer than ASR on a phone.
                     // Give it a small head start for this reply, but never make the user wait
                     // for a full model inference before their words are shown and answered.
                     var voiceEmotionTask = emotionPerception.AnalyzeSpeechTurnAsync(userTurn.AudioWav, userTurn.Text, cancellationToken);
-                    await WaitBrieflyForVoiceEmotionAsync(voiceEmotionTask, cancellationToken);
+                    turnVoice = await WaitBrieflyForVoiceEmotionAsync(voiceEmotionTask, cancellationToken);
                 }
 
                 conversationTiming.MarkEmotionReady();
-                await RespondToUserTextAsync(userTurn.Text, cancellationToken);
+                await RespondToUserTextAsync(userTurn.Text, turnVoice, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -166,30 +164,29 @@ namespace SrtpAvatar
             }
             finally
             {
-                LastTiming = (Application.isEditor ? "[Desktop preview] " : "") + conversationTiming.ToString();
-                if (config.ShowDiagnostics) Debug.Log(LastTiming);
+                if (conversationTiming != null)
+                {
+                    LastTiming = (Application.isEditor ? "[Desktop preview] " : "") + conversationTiming
+                        + $" outcome={LastConversationError} playbackFailed={LastPlaybackFailed}";
+                    if (config.ShowDiagnostics) Debug.Log(LastTiming);
+                }
                 conversationTiming = null;
                 EndSentencePresentation(LastConversationError != AppErr.none);
                 FinishTurnRecord();
                 FinishConversation(cancellationToken);
             }
         }
-        private static async Task WaitBrieflyForVoiceEmotionAsync(Task analysisTask, CancellationToken cancellationToken)
+        private static async Task<UserEmo> WaitBrieflyForVoiceEmotionAsync(Task<UserEmo> analysisTask, CancellationToken cancellationToken)
         {
-            if (analysisTask == null)
-            {
-                return;
-            }
-
             var budget = Task.Delay(VoiceEmotionResponseBudgetMilliseconds, cancellationToken);
             if (await Task.WhenAny(analysisTask, budget) == analysisTask)
             {
-                await analysisTask;
+                return await analysisTask;
             }
-            else
-            {
-                _ = ObserveVoiceEmotionAsync(analysisTask);
-            }
+
+            _ = ObserveVoiceEmotionAsync(analysisTask);
+            cancellationToken.ThrowIfCancellationRequested();
+            return null;
         }
 
         private static async Task ObserveVoiceEmotionAsync(Task analysisTask)
@@ -199,9 +196,9 @@ namespace SrtpAvatar
             catch (Exception ex) { Debug.LogException(ex); }
         }
 
-        private void OnTtsStarted()
+        private void OnTtsStarted(long? startedAtMs = null)
         {
-            conversationTiming?.MarkFirstAudio();
+            conversationTiming?.MarkFirstAudio(startedAtMs);
             StartPendingPresentation();
         }
 
@@ -221,14 +218,14 @@ namespace SrtpAvatar
             return true;
         }
 
-        private async Task RespondToUserTextAsync(string userText, CancellationToken cancellationToken)
+        private async Task RespondToUserTextAsync(string userText, UserEmo turnVoice, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             SetState(AvatarState.thinking, "思考");
             SetSubtitle($"你：{userText.Trim()}");
             SetHint("正在理解你的话...");
             var input = new TalkInput { text = userText };
-            input = emotionPerception == null ? input : emotionPerception.ApplyLatest(input);
+            input = emotionPerception == null ? input : emotionPerception.ApplyLatest(input, turnVoice);
             var streamSpeech = config.enableStreamingReplies && !config.enableCarCommunication && CanPlayReply;
             using var replyCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             using var sentences = new ReplySpeechQueue();
@@ -388,6 +385,7 @@ namespace SrtpAvatar
 
         public void CancelCurrentConversation()
         {
+            CancelDictation();
             manualSubmissionCancellation?.Cancel();
             conversationCancellation?.Cancel();
             speechService?.CancelAll();
@@ -417,6 +415,7 @@ namespace SrtpAvatar
             emotionPerception = GetOrAddComponent(emotionPerception);
 
             avatarSpeechDriver.Bind(avatarDriver, audioSource);
+            SynchronizeContinuousCapture();
             emotionPerception.Initialize(config);
             if (config.ShowDiagnostics)
             {
@@ -447,16 +446,16 @@ namespace SrtpAvatar
 #if UNITY_EDITOR
             SetSubtitle("在下方输入消息；首次使用请先通过右上角 API 配置模型。");
 #else
-            SetSubtitle(CanAutoListen ? "正在聆听，直接说话即可开始对话" : "请先完成 API 和系统语音服务配置");
+            SetSubtitle(DescribeInputMode());
 #endif
             SetHint(ResolveStartupHint());
         }
 
         private void ShowRecoverableError(AppErr error, string message = null)
         {
+            SetState(AvatarState.idle, "空闲");
             avatarSpeechDriver.SetEmotion(AvatarEmotion.sorrow);
             avatarSpeechDriver.PlayGesture(AvatarGesture.nod);
-            SetState(AvatarState.idle, "空闲");
             SetSubtitle(string.IsNullOrWhiteSpace(message) ? ToUserFacingError(error) : message);
             SetHint(ResolveErrorHint(error));
         }
@@ -466,10 +465,10 @@ namespace SrtpAvatar
 #if UNITY_EDITOR
             return DesktopLiveMode ? "真实模型 · 电脑端预览播放" : "离线测试 · 电脑端预览播放";
 #else
-            if (!config.ShowDiagnostics) return CanAutoListen ? "可以直接和我说话。" : "请先完成语音和 API 设置。";
-            var input = speechService.CanRecognize ? "输入：Android ASR" : "输入：系统语音不可用";
+            if (!config.ShowDiagnostics) return DescribeInputMode();
+            var input = InputMode == SpeechInputMode.TextOnly ? "输入：文字" : speechService.CanRecognize ? "输入：Android ASR" : "输入：系统语音不可用";
             var output = speechService.CanSpeak ? "输出：Android TTS" : "输出：系统 TTS 不可用";
-            var interaction = CanAutoListen ? "交互：自动聆听" : "交互：等待语音服务";
+            var interaction = DescribeInputMode();
             var dialogue = CanUseDeepSeek ? "对话：DeepSeek" : "对话：AI 未配置";
             var memory = config.enableLongTermMemory ? "记忆：启用" : "记忆：关闭";
             var car = config.enableCarCommunication && config.carCommunicationMode != CarCommunicationMode.Disabled ? "小车：启用" : "小车：关闭";
@@ -526,6 +525,7 @@ namespace SrtpAvatar
         private void OnDestroy()
         {
             isDestroyed = true;
+            CancelDictation();
             manualSubmissionCancellation?.Cancel();
             if (androidSpeech != null) androidSpeech.TtsStarted -= OnTtsStarted;
             automaticConversation?.Dispose();

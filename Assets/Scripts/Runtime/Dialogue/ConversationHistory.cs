@@ -57,5 +57,40 @@ namespace SrtpAvatar
             turn.Revision++;
             Revision++;
         }
+
+        internal List<SavedTurn> Capture()
+        {
+            var saved = new List<SavedTurn>(turns.Count);
+            foreach (var turn in turns)
+            {
+                if (turn.Status == ConversationTurnStatus.Pending) continue;
+                saved.Add(new SavedTurn { userText = turn.UserText, reply = turn.Reply, status = turn.Status,
+                    errorMessage = turn.ErrorMessage, committed = turn.Committed });
+            }
+            return saved;
+        }
+
+        internal static ConversationHistory Restore(List<SavedTurn> saved)
+        {
+            var history = new ConversationHistory();
+            for (var i = Math.Max(0, saved.Count - history.capacity); i < saved.Count; i++)
+            {
+                var entry = saved[i];
+                history.turns.Add(new ConversationTurn(++history.nextId, entry.userText)
+                {
+                    Reply = entry.reply ?? "", Status = entry.status,
+                    ErrorMessage = entry.errorMessage ?? "", Committed = entry.committed
+                });
+            }
+            return history;
+        }
+
+        [Serializable]
+        internal sealed class SavedTurn
+        {
+            public string userText, reply, errorMessage;
+            public ConversationTurnStatus status;
+            public bool committed;
+        }
     }
 }

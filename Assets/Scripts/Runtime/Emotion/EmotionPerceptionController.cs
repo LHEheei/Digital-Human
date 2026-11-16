@@ -40,6 +40,7 @@ namespace SrtpAvatar
         private bool fusionRequestInFlight;
         private bool fusionRefreshQueued;
         private bool audioCaptureSuspended;
+        private bool continuousAudioEnabled = true;
         private int consecutiveFaceMisses;
         private bool initialized;
         private bool captureReady;
@@ -74,13 +75,23 @@ namespace SrtpAvatar
             }
         }
 
-        public TalkInput ApplyLatest(TalkInput input)
+        public TalkInput ApplyLatest(TalkInput input, UserEmo turnVoice = null)
         {
             var target = input ?? throw new ArgumentNullException(nameof(input));
             var now = EmotionTime.UtcNowUnixMs;
             target.faceEmo = EmotionSamplingPolicy.FreshOrNull(FaceEmotion, now, EmotionSamplingPolicy.FaceFreshnessMs);
-            target.voiceEmo = EmotionSamplingPolicy.FreshOrNull(VoiceEmotion, now, EmotionSamplingPolicy.VoiceFreshnessMs);
-            target.fusionEmo = EmotionSamplingPolicy.FreshOrNull(FusionEmotion, now, EmotionSamplingPolicy.FusionFreshnessMs);
+            if (UsesSpeechTurnVoiceCapture)
+            {
+                target.voiceEmo = EmotionSamplingPolicy.FreshOrNull(turnVoice, now, EmotionSamplingPolicy.VoiceFreshnessMs);
+                target.fusionEmo = target.faceEmo != null || target.voiceEmo != null
+                    ? LocalEmotionFusion.Fuse(target.faceEmo, target.voiceEmo, now)
+                    : null;
+            }
+            else
+            {
+                target.voiceEmo = EmotionSamplingPolicy.FreshOrNull(VoiceEmotion, now, EmotionSamplingPolicy.VoiceFreshnessMs);
+                target.fusionEmo = EmotionSamplingPolicy.FreshOrNull(FusionEmotion, now, EmotionSamplingPolicy.FusionFreshnessMs);
+            }
             return target;
         }
 
@@ -88,6 +99,18 @@ namespace SrtpAvatar
         {
             audioCaptureSuspended = true;
             StopMicrophone();
+        }
+
+        internal void SetContinuousAudioEnabled(bool enabled)
+        {
+            if (continuousAudioEnabled == enabled) return;
+            continuousAudioEnabled = enabled;
+            if (!initialized || !IsPerceptionEnabled || UsesSpeechTurnVoiceCapture || !SupportsVoiceCapture) return;
+            StopCapture();
+            VoiceEmotion = null;
+            FusionEmotion = null;
+            if (isActiveAndEnabled) StartCapture();
+            NotifyUpdated();
         }
 
         public void ResumeAudioCapture()
@@ -173,9 +196,11 @@ namespace SrtpAvatar
                 var cameraPermission = SupportsFaceCapture
                     ? await new CameraPermissionService().RequestAsync(cancellationToken)
                     : PermState.granted;
+                cancellationToken.ThrowIfCancellationRequested();
                 var microphonePermission = UsesContinuousVoiceCapture
                     ? await new MicrophonePermissionService().RequestAsync(cancellationToken)
                     : PermState.granted;
+                cancellationToken.ThrowIfCancellationRequested();
                 if (cameraPermission != PermState.granted || microphonePermission != PermState.granted)
                 {
                     connectionStatus = "感知：相机或麦克风权限未授权";
@@ -254,7 +279,7 @@ namespace SrtpAvatar
         // Android local mode receives the actual user utterance from the speech bridge.
         // It must not start a second microphone stream for ambient sampling.
         private bool UsesSpeechTurnVoiceCapture => config != null && config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace;
-        private bool UsesContinuousVoiceCapture => SupportsVoiceCapture && !UsesSpeechTurnVoiceCapture;
+        private bool UsesContinuousVoiceCapture => continuousAudioEnabled && SupportsVoiceCapture && !UsesSpeechTurnVoiceCapture;
 
         private string ActiveConnectionStatus => config.emotionRuntimeMode == EmotionRuntimeMode.AndroidOnDeviceFace
             ? "感知：手机端本地人脸分析"
@@ -334,11 +359,11 @@ namespace SrtpAvatar
             }
         }
 
-        public async Task AnalyzeSpeechTurnAsync(byte[] wav, string transcript, CancellationToken cancellationToken)
+        public async Task<UserEmo> AnalyzeSpeechTurnAsync(byte[] wav, string transcript, CancellationToken cancellationToken)
         {
             if (!IsPerceptionEnabled || !UsesSpeechTurnVoiceCapture || wav == null || wav.Length == 0 || voiceRequestInFlight)
             {
-                return;
+                return null;
             }
 
             voiceRequestInFlight = true;
@@ -348,6 +373,7 @@ namespace SrtpAvatar
                 cancellationToken.ThrowIfCancellationRequested();
                 var calibrated = VoiceEmotionCalibrationPolicy.Calibrate(rawResult, transcript, FaceEmotion, EmotionTime.UtcNowUnixMs);
                 await ApplyVoiceResultAsync(calibrated, cancellationToken);
+                return calibrated;
             }
             catch (OperationCanceledException)
             {
@@ -358,6 +384,7 @@ namespace SrtpAvatar
                 Debug.LogException(ex);
                 VoiceStatus = "语音情绪分析暂不可用。";
                 NotifyUpdated();
+                return null;
             }
             finally
             {
